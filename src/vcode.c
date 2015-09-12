@@ -763,7 +763,8 @@ vcode_var_t vcode_get_type(int op)
    op_t *o = vcode_op_data(op);
    assert(o->kind == VCODE_OP_BOUNDS || o->kind == VCODE_OP_ALLOCA
           || o->kind == VCODE_OP_COPY || o->kind == VCODE_OP_SET_INITIAL
-          || o->kind == VCODE_OP_INDEX_CHECK);
+          || o->kind == VCODE_OP_INDEX_CHECK || o->kind == VCODE_OP_CONST
+          || o->kind == VCODE_OP_CAST);
    return o->type;
 }
 

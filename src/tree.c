@@ -988,6 +988,11 @@ uint32_t tree_index(tree_t t)
    return object_index(&(t->object));
 }
 
+bool tree_has_index(tree_t t)
+{
+   return object_has_index(&(t->object));
+}
+
 unsigned tree_visit(tree_t t, tree_visit_fn_t fn, void *context)
 {
    assert(t != NULL);

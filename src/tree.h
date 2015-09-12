@@ -294,6 +294,7 @@ void tree_add_net(tree_t t, netid_t n);
 void tree_change_net(tree_t t, unsigned n, netid_t i);
 
 uint32_t tree_index(tree_t t);
+bool tree_has_index(tree_t t);
 
 void tree_add_attr_str(tree_t t, ident_t name, ident_t str);
 ident_t tree_attr_str(tree_t t, ident_t name);

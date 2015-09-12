@@ -538,8 +538,9 @@ static bool lower_scalar_has_static_bounds(type_t type, vcode_reg_t *low_reg,
 static void lower_check_scalar_bounds(vcode_reg_t value, type_t type,
                                       tree_t where, tree_t hint)
 {
-   const int index1 = tree_index(where);
-   const int index2 = hint == NULL ? index1 : tree_index(hint);
+   const uint32_t index1 =
+      tree_has_index(where) ? tree_index(where) : UINT32_MAX;
+   const uint32_t index2 = hint == NULL ? index1 : tree_index(hint);
 
    const bounds_kind_t kind = lower_type_bounds_kind(type);
 
@@ -4591,7 +4592,6 @@ vcode_unit_t lower_thunk(tree_t fcall)
 
    vcode_select_unit(thunk_context);
 
-   fmt_loc(stdout, tree_loc(fcall));
    vcode_type_t vtype = lower_type(tree_type(fcall));
    vcode_unit_t thunk = emit_thunk(tree_ident(fcall), thunk_context, vtype);
 

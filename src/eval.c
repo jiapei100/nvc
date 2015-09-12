@@ -24,6 +24,11 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
+typedef union {
+   double  real;
+   int64_t integer;
+} value_t;
+
 #define VTABLE_SZ 16
 #define MAX_ITERS 1000
 
@@ -649,16 +654,50 @@ static void eval_stmt(tree_t t, vtable_t *v)
    }
 }
 
+static bool eval_possible(tree_t fcall)
+{
+   type_t result = tree_type(fcall);
+   if (!type_is_scalar(result))
+      return false;
+
+   if (tree_attr_int(tree_ref(fcall), impure_i, 0))
+      return NULL;
+
+   const int nparams = tree_params(fcall);
+   for (int i = 0; i < nparams; i++) {
+      tree_t p = tree_value(tree_param(fcall, i));
+      const tree_kind_t kind = tree_kind(p);
+      switch (kind) {
+      case T_LITERAL:
+         break;
+
+      case T_FCALL:
+         if (!eval_possible(p))
+            return false;
+         break;
+
+      case T_REF:
+         {
+            const tree_kind_t dkind = tree_kind(tree_ref(p));
+            if (dkind == T_UNIT_DECL || dkind == T_ENUM_LIT)
+               break;
+         }
+         // Fall-through
+
+      default:
+         return false;
+      }
+   }
+
+   return true;
+}
+
 tree_t eval(tree_t fcall)
 {
    assert(tree_kind(fcall) == T_FCALL);
 
-   const int nparams = tree_params(fcall);
-   for (int i = 0; i < nparams; i++) {
-      const tree_kind_t kind = tree_kind(tree_value(tree_param(fcall, i)));
-      if (kind != T_LITERAL)
-         return fcall;
-   }
+   if (!eval_possible(fcall))
+      return fcall;
 
    vcode_unit_t thunk = lower_thunk(fcall);
    if (thunk == NULL)

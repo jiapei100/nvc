@@ -20,6 +20,13 @@
 
 #include "tree.h"
 
+typedef enum {
+   EVAL_BOUNDS = (1 << 0),
+   EVAL_FCALL  = (1 << 1),
+   EVAL_WARN   = (1 << 2),
+   EVAL_LOWER  = (1 << 3),
+} eval_flags_t;
+
 // Annotate types and perform other semantics checks on a tree.
 // Returns false on error.
 bool sem_check(tree_t t);
@@ -37,7 +44,7 @@ void bounds_check(tree_t top);
 int bounds_errors(void);
 
 // Evaluate a function call at compile time
-tree_t eval(tree_t fcall);
+tree_t eval(tree_t fcall, eval_flags_t flags);
 
 // Elaborate a top level entity
 tree_t elab(tree_t top);

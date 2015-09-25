@@ -202,6 +202,7 @@ vcode_type_t vtype_field(vcode_type_t type, int field);
 vcode_type_t vtype_base(vcode_type_t type);
 char *vtype_record_name(vcode_type_t type);
 vcode_type_t vtype_real(void);
+vcode_unit_t vcode_find_unit(ident_t name);
 
 void vcode_opt(void);
 void vcode_close(void);

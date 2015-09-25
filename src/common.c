@@ -19,6 +19,7 @@
 
 #include "util.h"
 #include "common.h"
+#include "phase.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -42,6 +43,17 @@ int64_t assume_int(tree_t t)
          return tree_pos(ref);
       }
 
+   case T_FCALL:
+      {
+         const eval_flags_t flags =
+            EVAL_FCALL | EVAL_BOUNDS | EVAL_WARN | EVAL_LOWER;
+         tree_t new = eval(t, flags);
+         const tree_kind_t new_kind = tree_kind(new);
+         if (new_kind == T_LITERAL || new_kind == T_REF)
+            return assume_int(new);
+      }
+      // Fall-through
+
    default:
       fatal_at(tree_loc(t), "expression cannot be folded to "
                "an integer constant");
@@ -50,8 +62,11 @@ int64_t assume_int(tree_t t)
 
 void range_bounds(range_t r, int64_t *low, int64_t *high)
 {
-   const bool folded = folded_bounds(r, low, high);
-   assert(folded);
+   const int64_t left = assume_int(r.left);
+   const int64_t right = assume_int(r.right);
+
+   *low  = r.kind == RANGE_TO ? left : right;
+   *high = r.kind == RANGE_TO ? right : left;
 }
 
 tree_t call_builtin(const char *builtin, type_t type, ...)

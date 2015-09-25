@@ -18,6 +18,7 @@
 #include "util.h"
 #include "vcode.h"
 #include "array.h"
+#include "hash.h"
 
 #include <assert.h>
 #include <inttypes.h>
@@ -155,6 +156,7 @@ struct vcode_unit {
 
 static vcode_unit_t  active_unit = NULL;
 static vcode_block_t active_block = VCODE_INVALID_BLOCK;
+static hash_t       *registry = NULL;
 
 static inline int64_t sadd64(int64_t a, int64_t b)
 {
@@ -2379,6 +2381,22 @@ static unsigned vcode_unit_calc_depth(vcode_unit_t unit)
    return hops;
 }
 
+static void vcode_registry_add(vcode_unit_t vu)
+{
+   if (registry == NULL)
+      registry = hash_new(256, true);
+
+   hash_put(registry, vu->name, vu);
+}
+
+vcode_unit_t vcode_find_unit(ident_t name)
+{
+   if (registry == NULL)
+      return NULL;
+   else
+      return hash_get(registry, name);
+}
+
 vcode_unit_t emit_function(ident_t name, vcode_unit_t context,
                            vcode_type_t result)
 {
@@ -2392,6 +2410,8 @@ vcode_unit_t emit_function(ident_t name, vcode_unit_t context,
 
    active_unit = vu;
    vcode_select_block(emit_block());
+
+   vcode_registry_add(vu);
 
    return vu;
 }
@@ -2407,6 +2427,8 @@ vcode_unit_t emit_procedure(ident_t name, vcode_unit_t context)
 
    active_unit = vu;
    vcode_select_block(emit_block());
+
+   vcode_registry_add(vu);
 
    return vu;
 }

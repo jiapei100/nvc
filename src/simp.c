@@ -122,7 +122,7 @@ static tree_t simp_fcall(tree_t t, simp_ctx_t *ctx)
       }
    }
 
-   return eval(simp_call_args(t));
+   return eval(simp_call_args(t), 0);
 }
 
 static tree_t simp_pcall(tree_t t)

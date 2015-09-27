@@ -116,6 +116,20 @@ static value_t *eval_get_var(vcode_var_t var, eval_state_t *state)
    return &(state->vars[vcode_var_index(var)]);
 }
 
+static bool eval_value_eq(value_t *lhs, value_t *rhs)
+{
+   switch (lhs->kind) {
+   case VALUE_INTEGER:
+      return lhs->integer == rhs->integer;
+
+   case VALUE_REAL:
+      return lhs->real == rhs->real;
+
+   default:
+      fatal_trace("invalid value type in %s", __func__);
+   }
+}
+
 static void eval_op_const(int op, eval_state_t *state)
 {
    value_t *dst = eval_get_reg(vcode_get_result(op), state);
@@ -220,20 +234,8 @@ static void eval_op_cmp(int op, eval_state_t *state)
    value_t *lhs = eval_get_reg(vcode_get_arg(op, 0), state);
    value_t *rhs = eval_get_reg(vcode_get_arg(op, 1), state);
 
-   dst->kind = VALUE_INTEGER;
-
-   switch (lhs->kind) {
-   case VALUE_INTEGER:
-      dst->integer = lhs->integer == rhs->integer;
-      break;
-
-   case VALUE_REAL:
-      dst->real = lhs->real == rhs->real;
-      break;
-
-   default:
-      fatal_trace("invalid value type in %s", __func__);
-   }
+   dst->kind    = VALUE_INTEGER;
+   dst->integer = eval_value_eq(lhs, rhs);
 }
 
 static void eval_op_cast(int op, eval_state_t *state)
@@ -408,6 +410,8 @@ static void eval_op_wrap(int op, eval_state_t *state)
 
    dst->kind = VALUE_UARRAY;
    dst->uarray.data = src;
+
+   // XXX: fill in dims
 }
 
 static void eval_op_store(int op, eval_state_t *state)
@@ -441,6 +445,24 @@ static void eval_op_uarray_len(int op, eval_state_t *state)
 
    dst->kind    = VALUE_INTEGER;
    dst->integer = MAX(len, 0);
+}
+
+static void eval_op_memcmp(int op, eval_state_t *state)
+{
+   value_t *dst = eval_get_reg(vcode_get_result(op), state);
+   value_t *lhs = eval_get_reg(vcode_get_arg(op, 0), state);
+   value_t *rhs = eval_get_reg(vcode_get_arg(op, 1), state);
+   value_t *len = eval_get_reg(vcode_get_arg(op, 2), state);
+
+   dst->kind    = VALUE_INTEGER;
+   dst->integer = 1;
+
+   for (int i = 0; i < len->integer; i++) {
+      if (!eval_value_eq(&(lhs->pointer[i]), &(rhs->pointer[i]))) {
+         dst->integer = 0;
+         return;
+      }
+   }
 }
 
 static void eval_vcode(eval_state_t *state)
@@ -520,6 +542,10 @@ static void eval_vcode(eval_state_t *state)
 
       case VCODE_OP_UARRAY_LEN:
          eval_op_uarray_len(i, state);
+         break;
+
+      case VCODE_OP_MEMCMP:
+         eval_op_memcmp(i, state);
          break;
 
       default:

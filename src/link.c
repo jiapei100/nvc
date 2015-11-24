@@ -26,8 +26,11 @@
 #include <limits.h>
 #include <string.h>
 #include <sys/types.h>
+
+#ifndef __MINGW32__
 #include <sys/wait.h>
 #include <sys/stat.h>
+#endif
 
 #ifdef __CYGWIN__
 #include <process.h>
@@ -283,10 +286,12 @@ static void link_exec(void)
          printf("%s%c", args[i], (i + 1 == n_args ? '\n' : ' '));
    }
 
-#ifdef __CYGWIN__
+#if defined __CYGWIN__
    int status = spawnv(_P_WAIT, args[0], (const char * const *)args);
    if (status != 0)
       fatal("%s failed with status %d", args[0], status);
+#elif defined __MINGW32__
+   fatal("TODO link_exec on MSYS");
 #else  // __CYGWIN__
    pid_t pid = fork();
    if (pid == 0) {

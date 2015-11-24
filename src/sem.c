@@ -63,6 +63,7 @@ struct scope {
    hash_t        *decls;
    tree_t         subprog;
    wait_level_t   wait_level;
+   impure_io_t    impure_io;
 
    // For design unit scopes
    ident_t        prefix;
@@ -112,6 +113,7 @@ static type_t sem_implicit_dereference(tree_t t, get_fn_t get, set_fn_t set);
 static void scope_insert_alias(tree_t t, ident_t name);
 static bool scope_import_unit(ident_t unit_name, lib_t lib,
                               bool all, const loc_t *loc);
+static int sem_ambiguous_rate(tree_t t);
 
 static scope_t      *top_scope = NULL;
 static int           errors = 0;
@@ -136,6 +138,7 @@ static void scope_push(ident_t prefix)
    s->flags      = (top_scope ? top_scope->flags : 0);
    s->deferred   = NULL;
    s->wait_level = WAITS_NO;
+   s->impure_io  = 0;
 
    top_scope = s;
 }
@@ -154,8 +157,10 @@ static void scope_pop(void)
    hash_free(top_scope->decls);
 
    scope_t *s = top_scope;
-   if (s->down != NULL && s->down->subprog == s->subprog)
+   if (s->down != NULL && s->down->subprog == s->subprog) {
       s->down->wait_level |= s->wait_level;
+      s->down->impure_io  |= s->down->impure_io;
+   }
 
    top_scope = s->down;
    free(s);
@@ -792,6 +797,19 @@ static void sem_declare_predefined_ops(tree_t decl)
 
    type_t t = tree_type(decl);
 
+   if (type_kind(t) == T_CARRAY) {
+      // Construct an unconstrained array type for parameters
+      type_t u = type_new(T_UARRAY);
+      type_set_ident(u, type_ident(t));
+      type_set_elem(u, type_elem(t));
+
+      const int ndims = type_dims(t);
+      for (int i = 0; i < ndims; i++)
+         type_add_index_constr(u, tree_type(type_dim(t, i).left));
+
+      t = u;
+   }
+
    ident_t mult  = ident_new("\"*\"");
    ident_t div   = ident_new("\"/\"");
    ident_t plus  = ident_new("\"+\"");
@@ -916,10 +934,7 @@ static void sem_declare_predefined_ops(tree_t decl)
 
    // Logical operators
 
-   ident_t boolean_i = ident_new("STD.STANDARD.BOOLEAN");
-   ident_t bit_i = ident_new("STD.STANDARD.BIT");
-
-   bool logical = (type_ident(t) == boolean_i || type_ident(t) == bit_i);
+   bool logical = (type_ident(t) == std_bool_i || type_ident(t) == std_bit_i);
 
    if (logical) {
       sem_declare_binary(decl, ident_new("\"and\""), t, t, t, "and");
@@ -934,8 +949,8 @@ static void sem_declare_predefined_ops(tree_t decl)
    bool vec_logical = false;
    if (kind == T_CARRAY || kind == T_UARRAY) {
       type_t base = type_elem(t);
-      vec_logical = (type_ident(base) == boolean_i
-                     || type_ident(base) == bit_i);
+      vec_logical = (type_ident(base) == std_bool_i
+                     || type_ident(base) == std_bit_i);
    }
 
    if (vec_logical) {
@@ -1102,17 +1117,6 @@ static bool sem_check_subtype(tree_t t, type_t type, type_t *pbase)
       if (ndims == 0) {
          switch (base_kind) {
          case T_ENUM:
-            {
-               type_t std_int = sem_std_type("INTEGER");
-               range_t r = {
-                  .kind  = RANGE_TO,
-                  .left  = sem_int_lit(std_int, 0),
-                  .right = sem_int_lit(std_int, type_enum_literals(base) - 1)
-               };
-               type_add_dim(type, r);
-            }
-            break;
-
          case T_CARRAY:
          case T_SUBTYPE:
          case T_INTEGER:
@@ -1139,6 +1143,9 @@ static bool sem_check_subtype(tree_t t, type_t type, type_t *pbase)
       }
       else {
          // Check constraints
+
+         if (type_kind(base) == T_CARRAY)
+            sem_error(t, "may not change constraints of a constrained array");
 
          if (type_is_record(base))
             sem_error(t, "record subtype may not have constraints");
@@ -1261,6 +1268,15 @@ static bool sem_declare(tree_t decl, bool add_predefined)
    return ok;
 }
 
+static void sem_index_check_order(tree_t *first, tree_t *second)
+{
+   if (sem_ambiguous_rate(*first) > sem_ambiguous_rate(*second)) {
+      tree_t tmp = *first;
+      *first = *second;
+      *second = tmp;
+   }
+}
+
 static bool sem_check_range(range_t *r, type_t context)
 {
    if (r->kind == RANGE_EXPR) {
@@ -1313,10 +1329,13 @@ static bool sem_check_range(range_t *r, type_t context)
       }
    }
 
-   if (!sem_check_constrained(r->left, context))
+   tree_t first = r->left, second = r->right;
+   sem_index_check_order(&first, &second);
+
+   if (!sem_check_constrained(first, context))
       return false;
 
-   if (!sem_check_constrained(r->right, context))
+   if (!sem_check_constrained(second, tree_type(first)))
       return false;
 
    type_t left_type  = tree_type(r->left);
@@ -1567,6 +1586,29 @@ static bool sem_check_type(tree_t t, type_t *ptype)
    }
 }
 
+static bool sem_has_access(type_t t)
+{
+   // returns true if the type is an access type or is a composite
+   // type that contains a subelement of an access type
+   type_t base = type_base_recur(t);
+
+   if (type_is_access(base))
+      return true;
+
+   if (type_is_array(base))
+      return sem_has_access(type_elem(base));
+
+   if (type_is_record(base)) {
+      const int nfields = type_fields(base);
+      for (int i = 0; i < nfields; i++) {
+         if (sem_has_access(tree_type(type_field(base, i))))
+            return true;
+      }
+   }
+
+   return false;
+}
+
 static bool sem_check_type_decl(tree_t t)
 {
    // We need to insert the type into the scope before performing
@@ -1607,6 +1649,14 @@ static bool sem_check_type_decl(tree_t t)
             sem_error(t, "array %s cannot have unconstrained element type",
                       istr(tree_ident(t)));
 
+         if (type_is_file(elem_type))
+            sem_error(t, "array %s cannot have element of file type",
+                      istr(tree_ident(t)));
+
+         if (type_is_protected(elem_type))
+            sem_error(t, "array %s cannot have element of protected type",
+                      istr(tree_ident(t)));
+
          type_set_elem(base, elem_type);
       }
       break;
@@ -1637,6 +1687,21 @@ static bool sem_check_type_decl(tree_t t)
          }
 
          sem_declare_predefined_ops(t);
+         return true;
+      }
+
+   case T_ENUM:
+      {
+         sem_declare_predefined_ops(t);
+
+         type_t std_int = sem_std_type("INTEGER");
+         range_t r = {
+            .kind  = RANGE_TO,
+            .left  = sem_int_lit(std_int, 0),
+            .right = sem_int_lit(std_int, type_enum_literals(base) - 1)
+         };
+         type_add_dim(type, r);
+
          return true;
       }
 
@@ -1746,14 +1811,24 @@ static bool sem_check_type_decl(tree_t t)
                   sem_error(f, "duplicate field name %s", istr(f_name));
             }
 
+            type_t f_type = tree_type(f);
+
             // Recursive record types are not allowed
-            if (type_eq(type, tree_type(f)))
+            if (type_eq(type, f_type))
                sem_error(f, "recursive record types are not allowed");
 
             // Element types may not be unconstrained
-            if (type_is_unconstrained(tree_type(f)))
+            if (type_is_unconstrained(f_type))
                sem_error(f, "field %s with unconstrained array type "
                          "is not allowed", istr(f_name));
+
+             if (type_is_file(f_type))
+                sem_error(f, "record field %s cannot be of file type",
+                          istr(f_name));
+
+             if (type_is_protected(f_type))
+                sem_error(f, "record field %s cannot be of protected type",
+                          istr(f_name));
          }
 
          sem_declare_predefined_ops(t);
@@ -1769,11 +1844,26 @@ static bool sem_check_type_decl(tree_t t)
             return false;
          type_set_file(base, f);
 
-         if (type_kind(f) == T_ACCESS)
+         switch (type_kind(f)) {
+         case T_ACCESS:
             sem_error(t, "files may not be of access type");
-
-         if (type_kind(f) == T_FILE)
+            break;
+         case T_FILE:
             sem_error(t, "files may not be of file type");
+            break;
+         case T_PROTECTED:
+            sem_error(t, "files may not be of protected type");
+            break;
+         default:
+            break;
+         }
+
+         if (sem_has_access(f))
+            sem_error(t, "type %s has a subelement with an access type", sem_type_str(f));
+
+         type_t base_f = type_base_recur(f);
+         if (type_is_array(base_f) && type_index_constrs(base_f) > 1)
+            sem_error(t, "array type for file type must be one-dimensional");
 
          sem_declare_predefined_ops(t);
          return true;
@@ -1832,6 +1922,27 @@ static bool sem_make_visible(tree_t container, get_nth_fn_t get, int count)
    return ok;
 }
 
+static bool sem_no_access_file_or_protected(tree_t t, type_t type, const char *what)
+{
+   // constants, signals, attributes, generics, ports
+   // may not be of an access, file, or protected type, or
+   // of a composite type with a subelement of an access type
+
+   if (type_is_access(type))
+      sem_error(t, "%s may not have access type", what);
+
+   if (sem_has_access(type))
+      sem_error(t, "%s may not have a type with a subelement of access type", what);
+
+   if (type_is_protected(type))
+      sem_error(t, "%s may not have protected type", what);
+
+   if (type_is_file(type))
+      sem_error(t, "%s may not have file type", what);
+
+   return true;
+}
+
 static bool sem_check_decl(tree_t t)
 {
    type_t type = tree_type(t);
@@ -1852,6 +1963,19 @@ static bool sem_check_decl(tree_t t)
 
    if (type_is_unconstrained(type) && (kind != T_CONST_DECL))
       sem_error(t, "type %s is unconstrained", sem_type_str(type));
+
+   switch (kind) {
+   case T_CONST_DECL:
+      if (!sem_no_access_file_or_protected(t, type, "constants"))
+         return false;
+      break;
+   case T_SIGNAL_DECL:
+      if (!sem_no_access_file_or_protected(t, type, "signals"))
+         return false;
+      break;
+   default:
+      break;
+   }
 
    const bool needs_default_value =
       !tree_has_value(t) && (kind != T_PORT_DECL) && (kind != T_CONST_DECL)
@@ -1884,9 +2008,6 @@ static bool sem_check_decl(tree_t t)
    if (kind == T_PORT_DECL && tree_class(t) == C_DEFAULT)
       tree_set_class(t, C_SIGNAL);
 
-   if (kind == T_SIGNAL_DECL && type_is_access(type))
-      sem_error(t, "signals may not have access type");
-
    scope_apply_prefix(t);
 
    // From VHDL-2000 onwards shared variables must be protected types
@@ -1910,6 +2031,9 @@ static bool sem_check_decl(tree_t t)
                    sem_type_str(tree_type(deferred)), istr(tree_ident(t)),
                    sem_type_str(type));
 
+      if (type_is_unconstrained(tree_type(deferred)))
+         tree_set_type(deferred, tree_type(tree_value(t)));
+
       tree_set_value(deferred, tree_value(t));
       return true;
    }
@@ -1929,6 +2053,10 @@ static bool sem_check_port_decl(tree_t t)
       tree_t value = tree_value(t);
       if (!sem_check_constrained(value, type))
          return false;
+
+      port_mode_t mode = tree_subkind(t);
+      if (mode == PORT_LINKAGE)
+         sem_error(t, "port with mode LINKAGE can not have a default value");
 
       if (!type_eq(type, tree_type(value)))
          sem_error(value, "type of default value %s does not match type "
@@ -2052,17 +2180,47 @@ static bool sem_check_interface_class(tree_t port)
 {
    // See LRM 93 section 3.3 for restrictions
 
-   const type_kind_t kind = type_base_kind(tree_type(port));
+   const type_t type = tree_type(port);
+   const type_kind_t kind = type_base_kind(type);
    const class_t class = tree_class(port);
+   const port_mode_t mode = tree_subkind(port);
+
+   if (tree_has_value(port)) {
+       if (class == C_SIGNAL)
+          sem_error(port, "parameter of class SIGNAL can not have a default value");
+
+       if (class == C_VARIABLE) {
+          if (mode == PORT_OUT || mode == PORT_INOUT)
+             sem_error(port, "parameter of class VARIABLE with mode OUT or INOUT can not have a default value");
+       }
+
+       tree_t value = tree_value(port);
+       if (!sem_globally_static(value))
+          sem_error(value, "default value must be a static expression");
+
+       if (kind == T_PROTECTED)
+          sem_error(port, "parameter with protected type can not have a default value");
+   }
 
    if (kind == T_FILE && class != C_FILE)
       sem_error(port, "object %s with file type must have class FILE",
+                istr(tree_ident(port)));
+
+   if (kind != T_FILE && class == C_FILE)
+      sem_error(port, "object %s with class FILE must have file type",
                 istr(tree_ident(port)));
 
    if ((kind == T_ACCESS || kind == T_PROTECTED) && class != C_VARIABLE)
       sem_error(port, "object %s with %s type must have class VARIABLE",
                 istr(tree_ident(port)),
                 kind == T_ACCESS ? "access" : "protected");
+
+   if (sem_has_access(type) && class != C_VARIABLE)
+      sem_error(port, "object %s with type containing an access type must have class VARIABLE",
+                istr(tree_ident(port)));
+
+   if (class == C_CONSTANT && mode != PORT_IN)
+      sem_error(port, "parameter of class CONSTANT must have mode IN");
 
    return true;
 }
@@ -2221,6 +2379,17 @@ static bool sem_check_proc_ports(tree_t t)
          }
       }
 
+      switch (tree_subkind(p)) {
+      case PORT_BUFFER:
+         sem_error(p, "procedure arguments may not have mode BUFFER");
+         break;
+      case PORT_LINKAGE:
+         sem_error(p, "procedure arguments may not have mode LINKAGE");
+         break;
+      default:
+         break;
+      }
+
       if (!sem_check(p))
          return false;
 
@@ -2280,10 +2449,15 @@ static bool sem_check_proc_body(tree_t t)
    ok = ok && sem_check_stmts(t, tree_stmt, tree_stmts(t));
 
    tree_add_attr_int(t, wait_level_i, top_scope->wait_level);
+   if (top_scope->impure_io)
+      tree_add_attr_int(t, impure_io_i, top_scope->impure_io);
 
    tree_t proto = sem_check_duplicate(t, T_PROC_DECL);
-   if (proto != NULL)
+   if (proto != NULL) {
       tree_add_attr_int(proto, wait_level_i, top_scope->wait_level);
+      if (top_scope->impure_io)
+         tree_add_attr_int(t, impure_io_i, top_scope->impure_io);
+   }
 
    scope_pop();
    return ok;
@@ -2451,7 +2625,7 @@ static bool sem_check_parameter_class_match(tree_t decl, tree_t body)
       tree_t pd = tree_port(decl, k);
       tree_t pb = tree_port(body, k);
       if (tree_class(pd) != tree_class(pb))
-         sem_error(pb, "class %s of subprogram body %s paramteter %s does not "
+         sem_error(pb, "class %s of subprogram body %s parameter %s does not "
                    "match class %s in declaration", class_str(tree_class(pb)),
                    istr(tree_ident(body)), istr(tree_ident(pb)),
                    class_str(tree_class(pd)));
@@ -2601,6 +2775,8 @@ static bool sem_check_generics(tree_t t)
       tree_add_attr_int(g, elab_copy_i, 1);
 
       ok = sem_check(g) && ok;
+
+      ok = sem_no_access_file_or_protected(g, tree_type(g), "generics") && ok;
    }
 
    // Make generics visible in this region
@@ -2617,12 +2793,21 @@ static bool sem_check_ports(tree_t t)
    for (int n = 0; n < nports; n++) {
       tree_t p = tree_port(t, n);
 
-      if (tree_class(p) == C_DEFAULT)
+      switch (tree_class(p)) {
+      case C_DEFAULT:
          tree_set_class(p, C_SIGNAL);
+         break;
+      case C_SIGNAL:
+         break;
+      default:
+         sem_error(p, "invalid object class for port");
+      }
 
       tree_add_attr_int(p, elab_copy_i, 1);
 
       ok = sem_check(p) && ok;
+
+      ok = sem_no_access_file_or_protected(p, tree_type(p), "ports") && ok;
    }
 
    return ok;
@@ -2803,6 +2988,9 @@ static bool sem_check_var_assign(tree_t t)
 
    type_t target_type = tree_type(target);
    type_t value_type  = tree_type(value);
+
+   if (type_is_protected(target_type))
+      sem_error(t, "may not assign to variable of a protected type");
 
    if (!type_eq(target_type, value_type))
       sem_error(t, "type of value %s does not match type of target %s",
@@ -3054,8 +3242,14 @@ static int sem_ambiguous_rate(tree_t t)
    switch (tree_kind(t)) {
    case T_REF:
       {
-         tree_t decl = scope_find(tree_ident(t));
-         return (decl != NULL && tree_kind(decl) == T_ENUM_LIT) ? 50 : 0;
+         int n = 0;
+         tree_t decl;
+         bool have_enum = false;
+         while ((decl = scope_find_nth(tree_ident(t), n++))
+                 && tree_kind(decl) == T_ENUM_LIT)
+            have_enum = true;
+
+         return have_enum ? 50 + n : 0;
       }
    case T_AGGREGATE:
       return 100;
@@ -3064,7 +3258,7 @@ static int sem_ambiguous_rate(tree_t t)
    case T_LITERAL:
       {
          switch (tree_subkind(t)) {
-         case L_NULL:   return 0;
+         case L_NULL:   return 10;
          case L_STRING: return 90;
          default:       return -10;
          }
@@ -3741,6 +3935,10 @@ static bool sem_check_pcall(tree_t t)
          kind  = tree_kind(value);
       }
 
+      if (class == C_SIGNAL && (tree_kind(value) == T_OPEN))
+         sem_error(value, "actual for formal %s must not be OPEN",
+                   istr(tree_ident(port)));
+
       if (class == C_VARIABLE) {
          if (kind != T_REF)
             sem_error(value, "cannot associate this expression with "
@@ -3780,12 +3978,23 @@ static bool sem_check_pcall(tree_t t)
    else if (waits == WAITS_MAYBE && top_scope->wait_level == WAITS_NO)
       top_scope->wait_level = WAITS_MAYBE;
 
+   const impure_io_t impure_io = tree_attr_int(decl, impure_io_i, 0);
+   top_scope->impure_io |= impure_io;
+
    const bool in_func = top_scope->subprog != NULL
       && tree_kind(top_scope->subprog) == T_FUNC_BODY;
 
    if (waits == WAITS_YES && in_func)
       sem_error(t, "function %s cannot call procedure %s which contains "
                 "a wait statement", istr(tree_ident(top_scope->subprog)),
+                istr(tree_ident(decl)));
+   else if ((impure_io & IMPURE_FILE) && in_func)
+      sem_error(t, "function %s cannot call procedure %s which references "
+                "a file object", istr(tree_ident(top_scope->subprog)),
+                istr(tree_ident(decl)));
+   else if ((impure_io & IMPURE_SHARED) && in_func)
+      sem_error(t, "function %s cannot call procedure %s which references "
+                "a shared variable", istr(tree_ident(top_scope->subprog)),
                 istr(tree_ident(decl)));
 
 #if 0
@@ -3956,16 +4165,14 @@ static bool sem_check_concat(tree_t t)
       sem_error(t, "no composite type in context%s", tb_get(ts));
    }
 
-   if (sem_ambiguous_rate(left) < sem_ambiguous_rate(right)) {
-      if (!sem_check_concat_param(left, NULL)
-          || !sem_check_concat_param(right, tree_type(left)))
-         return false;
-   }
-   else {
-      if (!sem_check_concat_param(right, NULL)
-          || !sem_check_concat_param(left, tree_type(right)))
-         return false;
-   }
+   tree_t first = left, second = right;
+   sem_index_check_order(&first, &second);
+
+   if (!sem_check_concat_param(first, NULL))
+      return false;
+
+   if (!sem_check_concat_param(second, tree_type(first)))
+      return false;
 
    type_t ltype = tree_type(left);
    type_t rtype = tree_type(right);
@@ -4270,9 +4477,7 @@ static bool sem_check_aggregate(tree_t t)
       sem_error(t, "type of aggregate is ambiguous%s", tb_get(ts));
    }
 
-   type_t base_type = composite_type;
-   while (type_kind(base_type) == T_SUBTYPE)
-      base_type = type_base(base_type);
+   type_t base_type = type_base_recur(composite_type);
 
    const bool unconstrained = type_is_unconstrained(composite_type);
    const bool array = type_is_array(composite_type);
@@ -4518,16 +4723,24 @@ static bool sem_check_aggregate(tree_t t)
 
          assert(unconstrained);
 
-         type_t std_int = sem_std_type("INTEGER");
+         if (type_kind(index_type) == T_ENUM) {
+            const unsigned nlits = type_enum_literals(index_type);
 
-         if (type_kind(index_type) == T_ENUM)
+            if (nassocs > nlits) {
+               sem_error(t, "too many elements in array");
+            }
             left = make_ref(type_enum_literal(index_type, 0));
-         else
+            right = make_ref(type_enum_literal(index_type, nassocs - 1));
+         }
+         else {
+            type_t std_int = sem_std_type("INTEGER");
+
             left = type_dim(index_type, 0).left;
 
-         right = call_builtin("add", index_type,
-                              sem_int_lit(std_int, nassocs - 1),
-                              left, NULL);
+            right = call_builtin("add", index_type,
+                                 sem_int_lit(std_int, nassocs - 1),
+                                 left, NULL);
+         }
       }
       else {
          // The left and right bounds are determined by the smallest and
@@ -4697,13 +4910,14 @@ static bool sem_check_ref(tree_t t)
          if (type_set_member(type) || zero_arg_fn) {
             if (decl != NULL) {
                assert(zero_arg_fn || (tree_kind(next) == T_ENUM_LIT));
-               sem_error(t, "ambiguous %s %s",
-                         (tree_kind(next) != tree_kind(decl))
-                         ? "use of name"
-                         : ((zero_arg_fn
-                             ? "call to function"
-                             : "use of enumeration literal")),
-                         istr(name));
+               if (!zero_arg_fn || !type_eq(type, tree_type(decl)))
+                  sem_error(t, "ambiguous %s %s",
+                            (tree_kind(next) != tree_kind(decl))
+                            ? "use of name"
+                            : ((zero_arg_fn
+                                ? "call to function"
+                                : "use of enumeration literal")),
+                            istr(name));
             }
             decl = next;
          }
@@ -4719,7 +4933,8 @@ static bool sem_check_ref(tree_t t)
       if (n == 0) {
          // Try to provide better error messages for invalid record fields
          ident_t rname = ident_runtil(name, '.');
-         if (rname != NULL && (decl = scope_find(rname))) {
+         if (rname != NULL && (decl = scope_find(rname))
+             && class_has_type(class_of(decl))) {
             type_t dtype = tree_type(decl);
             const bool is_rec_ref =
                type_is_record(dtype)
@@ -4744,11 +4959,13 @@ static bool sem_check_ref(tree_t t)
       }
    }
 
-   switch (tree_kind(decl)) {
+   const tree_kind_t kind = tree_kind(decl);
+   switch (kind) {
    case T_PORT_DECL:
-      if (tree_class(decl) != C_CONSTANT) {
+      if (tree_class(decl) != C_CONSTANT && tree_class(decl) != C_DEFAULT) {
       case T_VAR_DECL:
       case T_SIGNAL_DECL:
+      case T_FILE_DECL:
          if (!sem_check_pure_ref(t, decl))
             return false;
       }
@@ -4756,7 +4973,6 @@ static bool sem_check_ref(tree_t t)
    case T_CONST_DECL:
    case T_ENUM_LIT:
    case T_ALIAS:
-   case T_FILE_DECL:
    case T_UNIT_DECL:
    case T_GENVAR:
       tree_set_type(t, tree_type(decl));
@@ -4775,6 +4991,13 @@ static bool sem_check_ref(tree_t t)
 
    default:
       sem_error(t, "invalid use of %s", istr(tree_ident(t)));
+   }
+
+   if (top_scope->subprog != NULL) {
+      if (kind == T_FILE_DECL)
+         top_scope->impure_io |= IMPURE_FILE;
+      else if (kind == T_VAR_DECL && tree_attr_int(decl, shared_i, 0))
+         top_scope->impure_io |= IMPURE_SHARED;
    }
 
    tree_set_ref(t, decl);
@@ -5426,7 +5649,8 @@ static bool sem_check_actual(formal_map_t *formals, int nformals,
             kind = tree_kind(ref);
          }
 
-         while ((kind == T_ARRAY_REF) || (kind == T_ARRAY_SLICE)) {
+         while ((kind == T_ARRAY_REF) || (kind == T_ARRAY_SLICE)
+             || (kind == T_RECORD_REF)) {
             ref  = tree_value(ref);
             kind = tree_kind(ref);
          }
@@ -5511,7 +5735,8 @@ static bool sem_check_actual(formal_map_t *formals, int nformals,
          // Conversion functions are in LRM 93 section 4.3.2.2
 
          tree_t func = tree_ref(value);
-         if ((tree_ports(func) == 1) && (tree_params(value) == 1))
+         if (tree_ports(func) == 1 && tree_params(value) == 1
+             && tree_attr_int(value, conversion_i, 0))
             actual = tree_value(tree_param(value, 0));
       }
    }
@@ -5593,11 +5818,23 @@ static bool sem_check_map(tree_t t, tree_t unit,
       // elaboration time
 
       for (int i = 0; i < nformals; i++) {
-         if (!formals[i].have && !tree_has_value(formals[i].decl)
-             && (tree_subkind(formals[i].decl) != PORT_OUT)) {
-            error_at(tree_loc(t), "missing actual for formal %s",
-                     istr(tree_ident(formals[i].decl)));
-            ++errors;
+         if (!formals[i].have) {
+            port_mode_t mode = tree_subkind(formals[i].decl);
+
+            if ((mode == PORT_IN) && !tree_has_value(formals[i].decl)) {
+               error_at(tree_loc(t), "missing actual for formal %s of "
+                        "mode IN without a default expression",
+                        istr(tree_ident(formals[i].decl)));
+               ++errors;
+            }
+
+            if ((mode != PORT_IN)
+                && type_is_unconstrained(tree_type(formals[i].decl))) {
+               error_at(tree_loc(t), "missing actual for formal %s with "
+                        "unconstrained array type",
+                        istr(tree_ident(formals[i].decl)));
+               ++errors;
+            }
          }
       }
    }
@@ -5729,8 +5966,10 @@ static bool sem_locally_static(tree_t t)
       tree_t decl = tree_ref(t);
       const tree_kind_t dkind = tree_kind(decl);
 
-      // A constant reference with a locally static value
+      // A constant reference (other than a deferred constant) with a locally static value
       if (dkind == T_CONST_DECL) {
+         if (!tree_has_value(decl))
+            return false;
          tree_t value = tree_value(decl);
          return sem_subtype_locally_static(tree_type(decl))
             && sem_locally_static(value)
@@ -6196,7 +6435,9 @@ static bool sem_check_for(tree_t t)
 
    tree_add_decl(t, idecl);
 
-   scope_push(NULL);
+   scope_push(tree_ident(t));
+   scope_apply_prefix(idecl);
+   scope_insert_alias(idecl, tree_ident2(t));
    scope_insert(idecl);
    loop_push(tree_ident(t));
 
@@ -6294,6 +6535,9 @@ static bool sem_check_attr_decl(tree_t t)
 {
    type_t type = tree_type(t);
    if (!sem_check_type(t, &type))
+      return false;
+
+   if (!sem_no_access_file_or_protected(t, type, "attributes"))
       return false;
 
    tree_set_type(t, type);
@@ -6449,6 +6693,14 @@ static bool sem_check_file_decl(tree_t t)
       if (!type_eq(tree_type(mode), open_kind))
          sem_error(mode, "open mode must have type FILE_OPEN_KIND");
    }
+
+   const bool is_pure_func_body =
+      top_scope->subprog != NULL
+      && tree_kind(top_scope->subprog) == T_FUNC_BODY
+      && !tree_attr_int(top_scope->subprog, impure_i, 0);
+
+   if (is_pure_func_body)
+      sem_error(t, "cannot declare a file object in a pure function");
 
    scope_apply_prefix(t);
    return scope_insert(t);

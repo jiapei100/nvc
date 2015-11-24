@@ -81,7 +81,7 @@ START_TEST(test_ports)
    const error_t expect[] = {
       { 31,  "cannot read output port O" },
       { 42,  "cannot assign to input port I" },
-      { 81,  "missing actual for formal I" },
+      { 81,  "missing actual for formal I of mode IN without a default expression" },
       { 85,  "formal I already has an actual" },
       { 89,  "too many positional actuals" },
       { 89,  "too many positional actuals" },
@@ -105,12 +105,13 @@ START_TEST(test_ports)
       { 311, "cannot assign to input port X" },
       { 312, "cannot read output port Y" },
       { 332, "cannot read parameter X with mode IN" },
+      { 355, "actual must be globally static expression or locally static" },
       { -1, NULL }
    };
    expect_errors(expect);
 
    parse_and_check(T_PACKAGE, T_ENTITY, T_ARCH, T_ENTITY, T_ARCH, T_ARCH,
-                   T_ARCH, T_ENTITY, T_ARCH, T_ARCH);
+                   T_ARCH, T_ENTITY, T_ARCH, T_ARCH, T_ARCH);
 
    fail_unless(parse() == NULL);
    fail_unless(parse_errors() == 0);
@@ -136,6 +137,7 @@ START_TEST(test_scope)
       { 167, "declaration NOT_HERE not found in unit WORK.PACK5" },
       { 189, "type MY_INT1 is not declared" },
       { 236, "missing library clause for FOO" },
+      { 306, "no visible declaration for L1.X" },
       { -1, NULL }
    };
    expect_errors(expect);
@@ -144,7 +146,8 @@ START_TEST(test_scope)
                    T_ARCH, T_ARCH, T_ARCH, T_ENTITY, T_ARCH, T_ENTITY,
                    T_PACKAGE, T_PACKAGE, T_ARCH, T_PACKAGE, T_ARCH,
                    T_ARCH, T_ENTITY, T_ARCH, T_ARCH, T_PACKAGE, T_ARCH,
-                   T_ARCH, T_PACKAGE, T_ARCH, T_ARCH, T_PACKAGE, T_ARCH);
+                   T_ARCH, T_PACKAGE, T_ARCH, T_ARCH, T_PACKAGE, T_ARCH,
+                   T_ARCH);
 
    fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
 }
@@ -249,6 +252,36 @@ START_TEST(test_const)
 }
 END_TEST
 
+START_TEST(test_const2)
+{
+   input_from_file(TESTDIR "/sem/const2.vhd");
+
+   tree_t p = parse();
+   fail_if(p == NULL);
+   fail_unless(tree_kind(p) == T_PACKAGE);
+   sem_check(p);
+
+   fail_unless(sem_errors() == 0);
+
+   fail_unless(tree_kind(p) == T_PACKAGE);
+
+   // The deferred constant array's type is originally unconstrained
+   tree_t d = tree_decl(p, 1);
+   fail_unless(tree_kind(d) == T_CONST_DECL);
+   fail_unless(type_is_unconstrained(tree_type(d)));
+
+   tree_t pb = parse();
+   fail_if(pb == NULL);
+   fail_unless(tree_kind(pb) == T_PACK_BODY);
+   sem_check(pb);
+
+   fail_unless(sem_errors() == 0);
+
+   // and then gets constrained after analysing the package body
+   fail_unless(!type_is_unconstrained(tree_type(d)));
+}
+END_TEST
+
 START_TEST(test_std)
 {
    input_from_file(TESTDIR "/sem/std.vhd");
@@ -335,9 +368,9 @@ START_TEST(test_func)
       { 180, "no suitable overload for function TEST20" },
       { 181, "missing actual for formal Y without default value" },
       { 182, "no suitable overload for function TEST20" },
-      { 239, "class variable of subprogram body WORK.FUNC2.TEST25 paramteter" },
-      { 245, "class default of subprogram body WORK.FUNC2.TEST26 paramteter" },
-      { 260, "invalid reference to X inside pure function NESTED" },
+      { 239, "class variable of subprogram body WORK.FUNC2.TEST25 parameter" },
+      { 245, "class default of subprogram body WORK.FUNC2.TEST26 parameter" },
+      { 271, "invalid reference to X inside pure function NESTED" },
       { -1, NULL }
    };
    expect_errors(expect);
@@ -384,6 +417,10 @@ START_TEST(test_array)
       { 285, "object K does not have a range" },
       { 295, "type of index universal integer does not match" },
       { 343, "invalid character 'f' in string literal of type BIT_VECTOR" },
+      { 365, "may not change constraints of a constrained array" },
+      { 366, "may not change constraints of a constrained array" },
+      { 373, "too many elements in array" },
+      { 379, "array T_FILE_ARRAY cannot have element of file type" },
       { -1, NULL }
    };
    expect_errors(expect);
@@ -515,6 +552,10 @@ START_TEST(test_procedure)
       { 137, "sorry, this form of parameter name is not yet supported" },
       { 142, "cannot read output port X" },
       { 148, "target of signal assignment is not a signal" },
+      { 157, "object ARG with type containing an access type must have class VARIABLE" },
+      { 162, "object ARG with type containing an access type must have class VARIABLE" },
+      { 167, "object ARG with type containing an access type must have class VARIABLE" },
+      { 172, "object ARG with type containing an access type must have class VARIABLE" },
       { -1, NULL }
    };
    expect_errors(expect);
@@ -627,6 +668,7 @@ START_TEST(test_record)
       {  82, "record type R1_SUB has no field Z" },
       {  86, "record subtype may not have constraints" },
       { 106, "record type R1 has no field Z" },
+      { 111, "record field A cannot be of file type" },
       { -1, NULL }
    };
    expect_errors(expect);
@@ -647,7 +689,13 @@ START_TEST(test_file)
       { 12, "file declarations must have file type" },
       { 16, "open mode must have type FILE_OPEN_KIND" },
       { 20, "file name must have type STRING" },
-      { 36, "no suitable overload for procedure READ" },
+      { 28, "array type for file type must be one-dimensional" },
+      { 30, "array type for file type must be one-dimensional" },
+      { 46, "type WORK.P.T_PTR_ARR has a subelement with an access type" },
+      { 47, "type WORK.P.SUB_PTR_ARR has a subelement with an access type" },
+      { 48, "type WORK.P.T_REC has a subelement with an access type" },
+      { 49, "type WORK.P.T_REC2 has a subelement with an access type" },
+      { 74, "no suitable overload for procedure READ" },
       { -1, NULL }
    };
    expect_errors(expect);
@@ -906,15 +954,43 @@ START_TEST(test_protected)
       {  50, "subtypes may not have protected base types" },
       {  52, "shared variable X must have protected type" },
       {  56, "variable Y with protected type may not have an initial value" },
-      { 108, "no visible declaration for X.COUNTER" },
-      { 109, "no suitable overload for procedure X.DECREMENT" },
-      { 114, "object X with protected type must have class VARIABLE" },
-      { 132, "missing body for protected type WORK.PKG.PROTECTED_T" },
+      {  64, "parameter with protected type can not have a default value" },
+      { 118, "no visible declaration for X.COUNTER" },
+      { 119, "no suitable overload for procedure X.DECREMENT" },
+      { 124, "object X with protected type must have class VARIABLE" },
+      { 135, "may not assign to variable of a protected type" },
+      { 150, "missing body for protected type WORK.PKG.PROTECTED_T" },
       { -1, NULL }
    };
    expect_errors(expect);
 
    parse_and_check(T_ENTITY, T_ARCH, T_ARCH, T_PACKAGE, T_PACKAGE, T_PACK_BODY);
+
+   fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
+}
+END_TEST
+
+START_TEST(test_protected2)
+{
+   set_standard(STD_00);
+
+   input_from_file(TESTDIR "/sem/protected2.vhd");
+
+   const error_t expect[] = {
+      {  5, "constants may not have protected type" },
+      {  5, "deferred constant C was not given a value in the package body" },
+      { 20, "files may not be of protected type" },
+      { 22, "array T_PROTECTED_ARRAY cannot have element of protected type" },
+      { 26, "record field B cannot be of protected type" },
+      { 30, "signals may not have protected type" },
+      { 31, "attributes may not have protected type" },
+      { 35, "generics may not have protected type" },
+      { 41, "ports may not have protected type" },
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   parse_and_check(T_PACKAGE, T_PACK_BODY, T_ENTITY, T_ARCH);
 
    fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
 }
@@ -1266,6 +1342,8 @@ START_TEST(test_issue201)
    input_from_file(TESTDIR "/sem/issue201.vhd");
 
    parse_and_check(T_PACKAGE, T_PACK_BODY);
+
+   fail_unless(sem_errors() == 0);
 }
 END_TEST
 
@@ -1334,6 +1412,173 @@ START_TEST(test_issue89)
 }
 END_TEST
 
+START_TEST(test_issue188)
+{
+   input_from_file(TESTDIR "/sem/issue188.vhd");
+
+   const error_t expect[] = {
+      {  9, "cannot declare a file object in a pure function" },
+      { 29, "invalid reference to F inside pure function FILE_FUNC2" },
+      { 46, "call procedure CALL_READ_B which references a file object" },
+      { 59, "call procedure UPDATE_X which references a shared variable" },
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   parse_and_check(T_ENTITY, T_ARCH);
+
+   fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
+}
+END_TEST
+
+START_TEST(test_issue219)
+{
+   input_from_file(TESTDIR "/sem/issue219.vhd");
+
+   parse_and_check(T_PACKAGE, T_PACK_BODY);
+
+   fail_unless(sem_errors() == 0);
+}
+END_TEST
+
+START_TEST(test_issue220)
+{
+   input_from_file(TESTDIR "/sem/issue220.vhd");
+
+   parse_and_check(T_PACKAGE, T_PACK_BODY);
+
+   fail_unless(sem_errors() == 0);
+}
+END_TEST
+
+START_TEST(test_issue224)
+{
+   input_from_file(TESTDIR "/sem/issue224.vhd");
+
+   const error_t expect[] = {
+      {  6, "parameter of class SIGNAL can not have a default value" },
+      { 18, "actual for formal A must not be OPEN" },
+      { 24, "parameter of class VARIABLE with mode OUT or INOUT can not have a default value" },
+      { 34, "parameter of class VARIABLE with mode OUT or INOUT can not have a default value" },
+      { 43, "port with mode LINKAGE can not have a default value" },
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   parse_and_check(T_ENTITY, T_ARCH, T_ARCH, T_ARCH, T_ARCH, T_ENTITY);
+
+   fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
+}
+END_TEST
+
+START_TEST(test_issue221)
+{
+   set_standard(STD_08);
+
+   input_from_file(TESTDIR "/sem/issue221.vhd");
+
+   parse_and_check(T_PACKAGE, T_PACK_BODY);
+
+   fail_unless(sem_errors() == 0);
+}
+END_TEST
+
+START_TEST(test_issue236)
+{
+   input_from_file(TESTDIR "/sem/issue236.vhd");
+
+   const error_t expect[] = {
+      { 24,  "missing actual for formal B of mode IN without a default expression" },
+      { 36,  "missing actual for formal C with unconstrained array type" },
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   parse_and_check(T_ENTITY, T_ENTITY, T_ARCH, T_ARCH);
+
+   fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
+}
+END_TEST
+
+START_TEST(test_issue239)
+{
+   input_from_file(TESTDIR "/sem/issue239.vhd");
+
+   const error_t expect[] = {
+      { 16,  "default value must be a static expression" },
+      { 23,  "default value must be a static expression" },
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   parse_and_check(T_ENTITY, T_ARCH, T_PACKAGE);
+
+   fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
+}
+END_TEST
+
+START_TEST(test_interfaces)
+{
+   input_from_file(TESTDIR "/sem/interfaces.vhd");
+
+   const error_t expect[] = {
+      { 13,  "invalid object class for port" },
+      { 17,  "invalid object class for port" },
+      { 21,  "invalid object class for port" },
+      { 30,  "invalid object class for generic" },
+      { 34,  "invalid object class for generic" },
+      { 38,  "invalid object class for generic" },
+      { 41,  "procedure arguments may not have mode BUFFER" },
+      { 42,  "procedure arguments may not have mode LINKAGE" },
+      { 44,  "parameter of class CONSTANT must have mode IN" },
+      { 45,  "parameter of class CONSTANT must have mode IN" },
+      { 47,  "object C with class FILE must have file type" },
+      { 48,  "object C with file type must have class FILE" },
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   parse_and_check(T_PACKAGE);
+
+   fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
+}
+END_TEST
+
+START_TEST(test_file_and_access)
+{
+   input_from_file(TESTDIR "/sem/file_and_access.vhd");
+
+   const error_t expect[] = {
+      { 10, "constants may not have access type" },
+      { 11, "constants may not have a type with a subelement of access type" },
+      { 12, "constants may not have a type with a subelement of access type" },
+      { 13, "constants may not have file type" },
+      { 15, "signals may not have access type" },
+      { 16, "signals may not have a type with a subelement of access type" },
+      { 17, "signals may not have a type with a subelement of access type" },
+      { 18, "signals may not have file type" },
+      { 20, "attributes may not have access type" },
+      { 21, "attributes may not have a type with a subelement of access type" },
+      { 22, "attributes may not have a type with a subelement of access type" },
+      { 23, "attributes may not have file type" },
+      { 27, "generics may not have access type" },
+      { 28, "generics may not have a type with a subelement of access type" },
+      { 29, "generics may not have a type with a subelement of access type" },
+      { 30, "generics may not have file type" },
+      { 36, "ports may not have access type" },
+      { 37, "ports may not have a type with a subelement of access type" },
+      { 38, "ports may not have a type with a subelement of access type" },
+      { 39, "ports may not have file type" },
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   parse_and_check(T_PACKAGE);
+
+   fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
+}
+END_TEST
+
 int main(void)
 {
    Suite *s = suite_create("sem");
@@ -1344,6 +1589,7 @@ int main(void)
    tcase_add_test(tc_core, test_scope);
    tcase_add_test(tc_core, test_ambiguous);
    tcase_add_test(tc_core, test_const);
+   tcase_add_test(tc_core, test_const2);
    tcase_add_test(tc_core, test_std);
    tcase_add_test(tc_core, test_wait);
    tcase_add_test(tc_core, test_func);
@@ -1374,6 +1620,7 @@ int main(void)
    tcase_add_test(tc_core, test_implicit);
    tcase_add_test(tc_core, test_config);
    tcase_add_test(tc_core, test_protected);
+   tcase_add_test(tc_core, test_protected2);
    tcase_add_test(tc_core, test_alias);
    tcase_add_test(tc_core, test_issue102);
    tcase_add_test(tc_core, test_issue105);
@@ -1400,6 +1647,15 @@ int main(void)
    tcase_add_test(tc_core, test_issue176);
    tcase_add_test(tc_core, test_context);
    tcase_add_test(tc_core, test_issue89);
+   tcase_add_test(tc_core, test_issue188);
+   tcase_add_test(tc_core, test_issue219);
+   tcase_add_test(tc_core, test_issue220);
+   tcase_add_test(tc_core, test_issue224);
+   tcase_add_test(tc_core, test_issue221);
+   tcase_add_test(tc_core, test_issue236);
+   tcase_add_test(tc_core, test_issue239);
+   tcase_add_test(tc_core, test_interfaces);
+   tcase_add_test(tc_core, test_file_and_access);
    suite_add_tcase(s, tc_core);
 
    return nvc_run_test(s);

@@ -902,8 +902,25 @@ static tree_t p_actual_part(void)
       tree_set_loc(t, CURRENT_LOC);
       return t;
    }
-   else
-      return p_expression();
+
+   // If the actual part takes either the second or third form above then the
+   // argument to the function call is the actual designator but only if the
+   // call is to a named function rather than an operator
+   // This is import for identifying conversion functions later
+   const token_t next = peek();
+   const bool had_name = (next == tID || next == tSTRING);
+
+   tree_t designator = p_expression();
+
+   const bool could_be_conversion =
+      had_name
+      && tree_kind(designator) == T_FCALL
+      && tree_params(designator) == 1;
+
+   if (could_be_conversion)
+      tree_add_attr_int(designator, conversion_i, 1);
+
+   return designator;
 }
 
 static void p_association_element(tree_t map, add_func_t addf)
@@ -1906,7 +1923,7 @@ static void p_interface_signal_declaration(tree_t parent, add_func_t addf)
    }
 }
 
-static void p_interface_variable_declaration(tree_t parent, class_t def_class)
+static void p_interface_variable_declaration(tree_t parent, class_t def_class, add_func_t addf)
 {
    // [variable] identifier_list : [ mode ] subtype_indication [ := expression ]
 
@@ -1941,11 +1958,11 @@ static void p_interface_variable_declaration(tree_t parent, class_t def_class)
       if (init != NULL)
          tree_set_value(d, init);
 
-      tree_add_port(parent, d);
+      (*addf)(parent, d);
    }
 }
 
-static void p_interface_file_declaration(tree_t parent)
+static void p_interface_file_declaration(tree_t parent, add_func_t addf)
 {
    // file identifier_list : subtype_indication
 
@@ -1968,7 +1985,7 @@ static void p_interface_file_declaration(tree_t parent)
       tree_set_type(d, type);
       tree_set_class(d, C_FILE);
 
-      tree_add_port(parent, d);
+      (*addf)(parent, d);
    }
 }
 
@@ -1991,11 +2008,11 @@ static void p_interface_declaration(class_t def_class, tree_t parent,
       break;
 
    case tVARIABLE:
-      p_interface_variable_declaration(parent, C_VARIABLE);
+      p_interface_variable_declaration(parent, C_VARIABLE, addf);
       break;
 
    case tFILE:
-      p_interface_file_declaration(parent);
+      p_interface_file_declaration(parent, addf);
       break;
 
    case tID:
@@ -2011,7 +2028,7 @@ static void p_interface_declaration(class_t def_class, tree_t parent,
 
          case C_VARIABLE:
          case C_DEFAULT:
-            p_interface_variable_declaration(parent, def_class);
+            p_interface_variable_declaration(parent, def_class, addf);
             break;
 
          default:
@@ -4872,6 +4889,10 @@ static tree_t p_component_instantiation_statement(ident_t label)
 
    consume(tSEMI);
 
+   if (label == NULL)
+      parse_error(CURRENT_LOC, "component instantiation statement must "
+                  "have a label");
+
    tree_set_loc(t, CURRENT_LOC);
    return t;
 }
@@ -5087,6 +5108,9 @@ static tree_t p_block_statement(ident_t label)
    p_trailing_label(label);
    consume(tSEMI);
 
+   if (label == NULL)
+      parse_error(CURRENT_LOC, "block statement must have a label");
+
    tree_set_loc(b, CURRENT_LOC);
    return b;
 }
@@ -5130,7 +5154,8 @@ static tree_t p_generate_statement(ident_t label)
    consume(tGENERATE);
 
    if (scan(tSIGNAL, tTYPE, tSUBTYPE, tFILE, tCONSTANT, tFUNCTION, tIMPURE,
-            tPURE, tALIAS, tATTRIBUTE, tBEGIN)) {
+            tPURE, tALIAS, tATTRIBUTE, tBEGIN, tPROCEDURE, tFOR, tCOMPONENT,
+            tUSE, tSHARED)) {
       while (not_at_token(tBEGIN))
          p_block_declarative_item(g);
       consume(tBEGIN);
@@ -5143,6 +5168,9 @@ static tree_t p_generate_statement(ident_t label)
    consume(tGENERATE);
    p_trailing_label(label);
    consume(tSEMI);
+
+   if (label == NULL)
+      parse_error(CURRENT_LOC, "generate statement must have a label");
 
    tree_set_loc(g, CURRENT_LOC);
    return g;
@@ -5211,7 +5239,6 @@ static tree_t p_concurrent_statement(void)
          return p_concurrent_signal_assignment_statement(label);
 
       default:
-         // XXX: this is a bit broken as we allow instances without labels
          expect(tPROCESS, tPOSTPONED, tCOMPONENT, tENTITY, tCONFIGURATION,
                 tWITH, tASSERT, tBLOCK, tIF, tFOR);
          drop_tokens_until(tSEMI);
@@ -5522,14 +5549,14 @@ void input_from_file(const char *file)
 
 tree_t parse(void)
 {
-   n_errors  = 0;
+   int old_errors = n_errors;
    n_correct = RECOVER_THRESH;
 
    if (peek() == tEOF)
       return NULL;
 
    tree_t unit = p_design_unit();
-   if (n_errors > 0)
+   if (n_errors > old_errors)
       return NULL;
    else
       return unit;

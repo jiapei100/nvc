@@ -137,4 +137,74 @@ begin
         assert i'a(14) = '0';           -- Error
     end process;
 
+    process is
+        constant FPO_LOG_MAX_ITERATIONS : integer := 9;
+        type T_FPO_LOG_ALPHA is array (0 to FPO_LOG_MAX_ITERATIONS-1) of integer;
+        variable alpha : T_FPO_LOG_ALPHA;
+    begin
+        if alpha(0 to 5) = (5, 4, 6, 6, 6, 6) then  -- OK
+            null;
+        end if;
+    end process;
+
+    process is
+        procedure real_proc(x : in real range 0.0 to 1.0);
+    begin
+        real_proc(0.0);                 -- OK
+        real_proc(1.0);                 -- OK
+        real_proc(2.0);                 -- Error
+    end process;
+
+    process is
+        type e is (one, two, three, four, five);
+
+        subtype se is e range two to four;
+        type t_arr is array (se range <>) of boolean;
+
+        constant c1 : t_arr(two to four) := (true, true);
+        constant c2 : t_arr(two to four) := (true, true, true, true);
+
+        procedure enum_proc(
+            arg1 : e range two to four;
+            arg2 : e range three downto two
+        ) is
+        begin
+        end procedure;
+    begin
+        enum_proc(arg1 =>   two, arg2 =>   two);    -- ok
+        enum_proc(arg1 => three, arg2 =>   one);    -- Error
+        enum_proc(arg1 =>  four, arg2 =>  four);    -- Error
+        enum_proc(arg1 =>   one, arg2 => three);    -- Error
+        enum_proc(arg1 =>  five, arg2 => three);    -- Error
+    end process;
+
+    process is
+        type e is (one, two, three, four, five);
+        type t_arr is array (two to four) of integer;
+        variable a : t_arr;
+    begin
+        a := (1, others => 2);          -- OK
+        a := (two => 1, others => 2);   -- OK
+        a := (one => 1, others => 2);   -- Error
+        a := (two to four => 1, others => 2);   -- OK
+        a := (one to five => 1, others => 2);   -- Error
+    end process;
+
+    process is
+        type e is (one, two, three, four, five);
+        type mat2d is array (e range <>, e range <>) of integer;
+        procedure p(m : in mat2d);
+    begin
+        p(((0, 1, 2, 3), (one to three => 5)));  -- Error
+    end process;
+
+    process is
+        type e is (one, two, three, four, five);
+        subtype se is e range two to three;
+        type arr is array (se range <>) of integer;
+        variable v1 : arr(two to three);        -- OK
+        variable v2 : arr(one to four);         -- Error
+    begin
+    end process;
+
 end architecture;

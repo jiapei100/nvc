@@ -17,9 +17,9 @@ START_TEST(test_bounds)
       {  32, "slice right index 11 out of bounds 1 to 10" },
       {  33, "slice left index 0 out of bounds 1 to 10" },
       {  37, "aggregate index 0 out of bounds 1 to 2147483647" },
-      {  46, "actual length 8 does not match formal length 4" },
-      {  47, "actual length 8 does not match formal length 4" },
-      {  50, "actual length 3 for dimension 2 does not" },
+      {  46, "actual length 4 does not match formal length 8" },
+      {  47, "actual length 4 does not match formal length 8" },
+      {  50, "actual length 4 for dimension 2 does not" },
       {  53, "length of value 9 does not match length of target 10" },
       {  54, "length of value 2 does not match length of target 0" },
       {  55, "expected 0 elements in aggregate but have 3" },
@@ -35,11 +35,60 @@ START_TEST(test_bounds)
       { 107, "aggregate index 5 out of bounds 1 to 3" },
       { 116, "length of sub-aggregate 2 does not match expected length 4" },
       { 137, "array index 14 out of bounds 0 to 2" },
+      { 155, "value 2.000000 out of bounds 0.000000 to 1.000000 for parameter"},
+      { 164, "expected 3 elements in aggregate but have 2"},
+      { 165, "expected 3 elements in aggregate but have 4"},
+      { 175, "value ONE out of bounds THREE downto TWO for parameter ARG2"},
+      { 176, "value FOUR out of bounds THREE downto TWO for parameter ARG2"},
+      { 177, "value ONE out of bounds TWO to FOUR for parameter ARG1"},
+      { 178, "value FIVE out of bounds TWO to FOUR for parameter ARG1"},
+      { 188, "aggregate index ONE out of bounds TWO to FOUR"},
+      { 190, "aggregate index ONE out of bounds TWO to FOUR"},
+      { 190, "aggregate index FIVE out of bounds TWO to FOUR"},
+      { 198, "length of sub-aggregate 3 does not match expected length 4" },
+      { 206, "left index ONE violates constraint SE" },
+      { 206, "right index FOUR violates constraint SE" },
       { -1, NULL }
    };
    expect_errors(expect);
 
    input_from_file(TESTDIR "/bounds/bounds.vhd");
+
+   tree_t a = parse_and_check(T_ENTITY, T_ARCH);
+   fail_unless(sem_errors() == 0);
+
+   simplify(a);
+   bounds_check(a);
+
+   fail_unless(bounds_errors() == (sizeof(expect) / sizeof(error_t)) - 1);
+}
+END_TEST
+
+START_TEST(test_bounds2)
+{
+   const error_t expect[] = {
+      {  13, "assignment delay may not be negative"},
+      {  20, "assignment delay may not be negative"},
+      {  24, "assignment delay may not be negative"},
+      {  25, "assignment delay may not be negative"},
+      {  33, "rejection limit may not be negative"},
+      {  34, "rejection limit may not be greater than first assignment delay"},
+      {  39, "wait timeout may not be negative"},
+      {  52, "value 20 out of target bounds 0 to 9"},
+      {  53, "value 'Z' out of target bounds 'a' to 'z'"},
+      {  54, "value 10.000000 out of target bounds 0.000000 to 5.000000"},
+      {  55, "value 0 out of target bounds 10000000 to 10000000000"},
+      {  56, "value 10 out of target bounds 0 to 1"},
+      {  59, "value 30 out of target bounds 1 to 10"},
+      {  63, "value 'c' out of target bounds 'a' to 'b'"},
+      {  73, "value 2 out of target bounds 0 to 1"},
+      {  70, "value 20 out of target bounds 10 downto 0"},
+      {  79, "value 5.100000 out of target bounds 0.000000 to 5.000000"},
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   input_from_file(TESTDIR "/bounds/bounds2.vhd");
 
    tree_t a = parse_and_check(T_ENTITY, T_ARCH);
    fail_unless(sem_errors() == 0);
@@ -196,12 +245,32 @@ START_TEST(test_issue208)
 }
 END_TEST
 
+START_TEST(test_issue247)
+{
+   const error_t expect[] = {
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   input_from_file(TESTDIR "/bounds/issue247.vhd");
+
+   tree_t a = parse_and_check(T_PACKAGE);
+   fail_unless(sem_errors() == 0);
+
+   simplify(a);
+   bounds_check(a);
+
+   fail_unless(bounds_errors() == ARRAY_LEN(expect) - 1);
+}
+END_TEST
+
 int main(void)
 {
    Suite *s = suite_create("bounds");
 
    TCase *tc_core = nvc_unit_test();
    tcase_add_test(tc_core, test_bounds);
+   tcase_add_test(tc_core, test_bounds2);
    tcase_add_test(tc_core, test_case);
    tcase_add_test(tc_core, test_issue36);
    tcase_add_test(tc_core, test_issue54);
@@ -209,6 +278,7 @@ int main(void)
    tcase_add_test(tc_core, test_issue150);
    tcase_add_test(tc_core, test_issue200);
    tcase_add_test(tc_core, test_issue208);
+   tcase_add_test(tc_core, test_issue247);
    suite_add_tcase(s, tc_core);
 
    return nvc_run_test(s);

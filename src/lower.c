@@ -3210,9 +3210,12 @@ static void lower_pcall(tree_t pcall)
 {
    tree_t decl = tree_ref(pcall);
 
+   const int saved_heap = emit_heap_save();
+
    ident_t builtin = tree_attr_str(decl, builtin_i);
    if (builtin != NULL) {
       lower_builtin(pcall, builtin);
+      lower_cleanup_temp_objects(saved_heap);
       return;
    }
 
@@ -3239,6 +3242,7 @@ static void lower_pcall(tree_t pcall)
       }
       else
          emit_fcall(name, VCODE_INVALID_TYPE, args, nargs);
+      lower_cleanup_temp_objects(saved_heap);
    }
    else {
       const int hops = nest_depth > 0 ? vcode_unit_depth() - nest_depth : 0;
@@ -4109,29 +4113,44 @@ static void lower_decls(tree_t scope, vcode_unit_t context)
 
    const int nest_depth = tree_attr_int(scope, nested_i, 0);
 
+   // Lower declarations in two passes with subprograms after signals,
+   // variables, constants, etc.
+
    const int ndecls = tree_decls(scope);
+
    for (int i = 0; i < ndecls; i++) {
       tree_t d = tree_decl(scope, i);
       const tree_kind_t kind = tree_kind(d);
-
       if (kind == T_FUNC_BODY || kind == T_PROC_BODY || kind == T_PROT_BODY) {
-         vcode_block_t bb = vcode_active_block();
-
-         if (nested)
+         if (nested) {
             tree_add_attr_int(d, nested_i, nest_depth + 1);
-
-         switch (kind) {
-         case T_FUNC_BODY: lower_func_body(d, context); break;
-         case T_PROC_BODY: lower_proc_body(d, context); break;
-         case T_PROT_BODY: lower_protected_body(d); break;
-         default: break;
+            lower_mangle_func(d, context);
          }
-
-         vcode_select_unit(context);
-         vcode_select_block(bb);
       }
       else if (scope_kind != T_PROT_BODY)
          lower_decl(d);
+   }
+
+   for (int i = 0; i < ndecls; i++) {
+      tree_t d = tree_decl(scope, i);
+      const tree_kind_t kind = tree_kind(d);
+      if (kind != T_FUNC_BODY && kind != T_PROC_BODY && kind != T_PROT_BODY)
+         continue;
+
+      vcode_block_t bb = vcode_active_block();
+
+      if (kind != T_PROT_BODY && tree_has_code(d))
+         continue;
+
+      switch (kind) {
+      case T_FUNC_BODY: lower_func_body(d, context); break;
+      case T_PROC_BODY: lower_proc_body(d, context); break;
+      case T_PROT_BODY: lower_protected_body(d); break;
+      default: break;
+      }
+
+      vcode_select_unit(context);
+      vcode_select_block(bb);
    }
 }
 
@@ -4239,9 +4258,7 @@ static void lower_proc_body(tree_t body, vcode_unit_t context)
 
    lower_finished();
 
-   assert(!tree_has_code(body));
    tree_set_code(body, vu);
-
    lower_cleanup(body);
 }
 

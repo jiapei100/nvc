@@ -285,12 +285,13 @@ START_TEST(test_ffold)
 
    simplify(a);
 
-   fail_unless(folded_i(tree_value(tree_decl(a, 4)), 6));
-   fail_unless(folded_i(tree_value(tree_decl(a, 6)), 4));
-   fail_unless(folded_i(tree_value(tree_decl(a, 7)), 3));
-   fail_unless(folded_i(tree_value(tree_decl(a, 8)), 2));
-   fail_unless(folded_i(tree_value(tree_decl(a, 9)), 5));
-   fail_unless(folded_i(tree_value(tree_decl(a, 10)), 10));
+   fail_unless(folded_i(tree_value(tree_decl(a, 6)), 6));
+   fail_unless(folded_i(tree_value(tree_decl(a, 8)), 4));
+   fail_unless(folded_i(tree_value(tree_decl(a, 9)), 3));
+   fail_unless(folded_i(tree_value(tree_decl(a, 10)), 2));
+   fail_unless(folded_i(tree_value(tree_decl(a, 11)), 5));
+   fail_unless(folded_i(tree_value(tree_decl(a, 12)), 10));
+   fail_unless(folded_b(tree_value(tree_decl(a, 13)), true));
 }
 END_TEST
 
@@ -358,6 +359,15 @@ START_TEST(test_context)
 }
 END_TEST
 
+START_TEST(test_issue212)
+{
+   input_from_file(TESTDIR "/simp/issue212.vhd");
+
+   tree_t top = run_elab();
+   fail_unless(tree_stmts(top) == 1);
+}
+END_TEST
+
 int main(void)
 {
    Suite *s = suite_create("simplify");
@@ -370,6 +380,7 @@ int main(void)
    tcase_add_test(tc_core, test_issue49);
    tcase_add_test(tc_core, test_issue155);
    tcase_add_test(tc_core, test_context);
+   tcase_add_test(tc_core, test_issue212);
    suite_add_tcase(s, tc_core);
 
    return nvc_run_test(s);

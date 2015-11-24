@@ -65,6 +65,17 @@ AC_CHECK_HEADERS([limits.h stddef.h fcntl.h libintl.h malloc.h \
 AC_CHECK_MEMBERS([struct stat.st_mtimespec.tv_nsec])
 AC_CHECK_MEMBERS([struct stat.st_mtim.tv_nsec])
 
+AX_CHECK_LINK_FLAG([-rdynamic],
+  [RDYNAMIC_FLAG="-rdynamic"],
+  [RDYNAMIC_FLAG=""])
+AC_SUBST(RDYNAMIC_FLAG)
+
+AX_CHECK_COMPILE_FLAG([-fPIC],
+  [PIC_FLAG="-fPIC"],
+  [PIC_FLAG=""],
+  [-Werror])
+AC_SUBST(PIC_FLAG)
+
 AX_PROG_FLEX([], [AC_MSG_ERROR(GNU Flex not found)])
 
 case $host_os in
@@ -144,7 +155,7 @@ if test x$enable_fst_judy = xyes ; then
   AC_DEFINE_UNQUOTED([_WAVE_HAVE_JUDY], [1], [Internal definition of GTKWave for Judy])
 fi
 
-AX_LLVM_C([engine bitreader bitwriter])
+AX_LLVM_C([engine bitreader bitwriter ipo linker])
 AM_CONDITIONAL([FORCE_CXX_LINK], [test ! x$ax_cv_llvm_shared = xyes])
 
 PKG_CHECK_EXISTS([check],

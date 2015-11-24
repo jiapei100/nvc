@@ -273,9 +273,9 @@ static tree_t elab_port_to_signal(tree_t arch, tree_t port, tree_t actual)
    tree_set_type(s, type);
    tree_add_attr_int(s, fst_dir_i, mode);
 
-   if ((mode == PORT_OUT) || (mode == PORT_INOUT)) {
+   if ((mode == PORT_OUT) || (mode == PORT_INOUT) || (mode == PORT_BUFFER)) {
       if (tree_has_value(port))
-         tree_add_attr_tree(s, ident_new("driver_init"), tree_value(port));
+         tree_add_attr_tree(s, driver_init_i, tree_value(port));
    }
 
    tree_add_decl(arch, s);
@@ -741,6 +741,8 @@ static bool elab_should_copy(tree_t t)
    switch (tree_kind(t)) {
    case T_SIGNAL_DECL:
    case T_GENVAR:
+   case T_PROCESS:
+   case T_ARCH:
       return true;
    case T_LITERAL:
    case T_ASSOC:
@@ -1191,7 +1193,7 @@ static void elab_if_generate(tree_t t, elab_ctx_t *ctx)
    }
 }
 
-void elab_rename_subprograms(tree_t t, ident_t prefix)
+static void elab_rename_subprograms(tree_t t, ident_t prefix)
 {
    const int ndecls = tree_decls(t);
    for (int i = 0; i < ndecls; i++) {
@@ -1400,9 +1402,8 @@ static void elab_top_level_generics(tree_t arch, const elab_ctx_t *ctx)
    (void)elab_map(ent, arch, tree_generics, tree_generic, NULL, NULL);
 }
 
-static void elab_entity(tree_t t, const elab_ctx_t *ctx)
+static void elab_entity_arch(tree_t t, tree_t arch, const elab_ctx_t *ctx)
 {
-   tree_t arch = pick_arch(NULL, tree_ident(t), NULL, ctx);
    const char *name = simple_name(istr(tree_ident(t)));
    ident_t ninst = hpathf(ctx->inst, ':', ":%s(%s)", name,
                           simple_name(istr(tree_ident(arch))));
@@ -1414,7 +1415,7 @@ static void elab_entity(tree_t t, const elab_ctx_t *ctx)
    elab_pseudo_context(ctx->out, t);
    elab_copy_context(t, ctx);
 
-   tree_add_attr_str(ctx->out, ident_new("simple_name"), npath);
+   tree_add_attr_str(ctx->out, simple_name_i, npath);
 
    elab_funcs(arch, t, ctx);
    simplify(arch);
@@ -1611,7 +1612,13 @@ tree_t elab(tree_t top)
 
    switch (tree_kind(top)) {
    case T_ENTITY:
-      elab_entity(top, &ctx);
+      {
+         tree_t arch = pick_arch(NULL, tree_ident(top), NULL, &ctx);
+         elab_entity_arch(top, arch, &ctx);
+      }
+      break;
+   case T_ARCH:
+      elab_entity_arch(tree_ref(top), top, &ctx);
       break;
    default:
       fatal("%s is not a suitable top-level unit", istr(tree_ident(top)));

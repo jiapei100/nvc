@@ -33,6 +33,7 @@ bool folded_bool(tree_t t, bool *b);
 bool folded_length(range_t r, int64_t *l);
 bool folded_enum(tree_t t, unsigned *pos);
 bool folded_bounds(range_t r, int64_t *low, int64_t *high);
+bool folded_bounds_real(range_t r, double *low, double *high);
 tree_t get_int_lit(tree_t t, int64_t i);
 tree_t get_bool_lit(tree_t t, bool v);
 tree_t get_real_lit(tree_t t, double r);
@@ -69,6 +70,11 @@ typedef enum {
    WAITS_MAYBE = 0x1,
    WAITS_YES   = 0x3,
 } wait_level_t;
+
+typedef enum {
+   IMPURE_FILE   = 0x1,
+   IMPURE_SHARED = 0x2,
+} impure_io_t;
 
 //
 // VHDL standard revisions
@@ -177,14 +183,14 @@ GLOBAL ident_t cond_tag_i;
 GLOBAL ident_t sub_cond_i;
 GLOBAL ident_t static_i;
 GLOBAL ident_t impure_i;
-GLOBAL ident_t elide_bounds_i;
 GLOBAL ident_t range_var_i;
-GLOBAL ident_t last_value_i;
-GLOBAL ident_t builtin_i;
 GLOBAL ident_t postponed_i;
 GLOBAL ident_t work_i;
 GLOBAL ident_t llvm_i;
 GLOBAL ident_t wait_level_i;
+GLOBAL ident_t impure_io_i;
+GLOBAL ident_t simple_name_i;
+GLOBAL ident_t conversion_i;
 
 void intern_strings();
 

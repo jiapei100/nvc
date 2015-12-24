@@ -903,8 +903,25 @@ static tree_t p_actual_part(void)
       tree_set_loc(t, CURRENT_LOC);
       return t;
    }
-   else
-      return p_expression();
+
+   // If the actual part takes either the second or third form above then the
+   // argument to the function call is the actual designator but only if the
+   // call is to a named function rather than an operator
+   // This is import for identifying conversion functions later
+   const token_t next = peek();
+   const bool had_name = (next == tID || next == tSTRING);
+
+   tree_t designator = p_expression();
+
+   const bool could_be_conversion =
+      had_name
+      && tree_kind(designator) == T_FCALL
+      && tree_params(designator) == 1;
+
+   if (could_be_conversion)
+      tree_add_attr_int(designator, conversion_i, 1);
+
+   return designator;
 }
 
 static void p_association_element(tree_t map, add_func_t addf)
@@ -1907,7 +1924,7 @@ static void p_interface_signal_declaration(tree_t parent, add_func_t addf)
    }
 }
 
-static void p_interface_variable_declaration(tree_t parent, class_t def_class)
+static void p_interface_variable_declaration(tree_t parent, class_t def_class, add_func_t addf)
 {
    // [variable] identifier_list : [ mode ] subtype_indication [ := expression ]
 
@@ -1942,11 +1959,11 @@ static void p_interface_variable_declaration(tree_t parent, class_t def_class)
       if (init != NULL)
          tree_set_value(d, init);
 
-      tree_add_port(parent, d);
+      (*addf)(parent, d);
    }
 }
 
-static void p_interface_file_declaration(tree_t parent)
+static void p_interface_file_declaration(tree_t parent, add_func_t addf)
 {
    // file identifier_list : subtype_indication
 
@@ -1969,7 +1986,7 @@ static void p_interface_file_declaration(tree_t parent)
       tree_set_type(d, type);
       tree_set_class(d, C_FILE);
 
-      tree_add_port(parent, d);
+      (*addf)(parent, d);
    }
 }
 
@@ -1992,11 +2009,11 @@ static void p_interface_declaration(class_t def_class, tree_t parent,
       break;
 
    case tVARIABLE:
-      p_interface_variable_declaration(parent, C_VARIABLE);
+      p_interface_variable_declaration(parent, C_VARIABLE, addf);
       break;
 
    case tFILE:
-      p_interface_file_declaration(parent);
+      p_interface_file_declaration(parent, addf);
       break;
 
    case tID:
@@ -2012,7 +2029,7 @@ static void p_interface_declaration(class_t def_class, tree_t parent,
 
          case C_VARIABLE:
          case C_DEFAULT:
-            p_interface_variable_declaration(parent, def_class);
+            p_interface_variable_declaration(parent, def_class, addf);
             break;
 
          default:
@@ -4130,8 +4147,8 @@ static void p_context_declaration(tree_t unit)
    consume(tIS);
 
    // LRM 08 section 13.1 forbids preceeding context clause
-   if (tree_contexts(unit) != 0)
-      parse_error(tree_loc(tree_context(unit, 0)), "context clause preceeding "
+   if (tree_contexts(unit) != 2)     // Implicit WORK and STD
+      parse_error(tree_loc(tree_context(unit, 2)), "context clause preceeding "
                   "context declaration must be empty");
 
    p_context_clause(unit);
@@ -5442,6 +5459,14 @@ static tree_t p_design_unit(void)
    BEGIN("design unit");
 
    tree_t unit = tree_new(T_DESIGN_UNIT);
+
+   tree_t std = tree_new(T_LIBRARY);
+   tree_set_ident(std, std_i);
+   tree_add_context(unit, std);
+
+   tree_t work = tree_new(T_LIBRARY);
+   tree_set_ident(work, work_i);
+   tree_add_context(unit, work);
 
    p_context_clause(unit);
    p_library_unit(unit);

@@ -99,7 +99,7 @@ tree_t call_builtin(const char *builtin, type_t type, ...)
    if (decl == NULL) {
       decl = tree_new(T_FUNC_DECL);
       tree_set_ident(decl, name_i);
-      tree_add_attr_str(decl, ident_new("builtin"), ident_new(builtin));
+      tree_add_attr_str(decl, builtin_i, ident_new(builtin));
    }
 
    struct decl_cache *c = xmalloc(sizeof(struct decl_cache));
@@ -153,12 +153,9 @@ bool folded_real(tree_t t, double *l)
 
 bool folded_length(range_t r, int64_t *l)
 {
-   int64_t left, right;
-   if (folded_int(r.left, &left) && folded_int(r.right, &right)) {
-      if (r.kind == RANGE_TO)
-         *l = MAX(right - left + 1, 0);
-      else
-         *l = MAX(left - right + 1, 0);
+   int64_t low, high;
+   if (folded_bounds(r, &low, &high)) {
+      *l = MAX(high - low + 1, 0);
       return true;
    }
    else
@@ -192,6 +189,27 @@ bool folded_bounds(range_t r, int64_t *low, int64_t *high)
    }
 }
 
+bool folded_bounds_real(range_t r, double *low, double *high)
+{
+   double left, right;
+   if (folded_real(r.left, &left) && folded_real(r.right, &right)) {
+      switch (r.kind) {
+      case RANGE_TO:
+         *low  = left;
+         *high = right;
+         return true;
+      case RANGE_DOWNTO:
+         *low  = right;
+         *high = left;
+         return true;
+      default:
+         return false;
+      }
+   }
+   else
+      return false;
+}
+
 bool folded_enum(tree_t t, unsigned *pos)
 {
    if (tree_kind(t) == T_REF) {
@@ -207,7 +225,6 @@ bool folded_enum(tree_t t, unsigned *pos)
 
 bool folded_bool(tree_t t, bool *b)
 {
-   ident_t std_bool_i = ident_new("STD.STANDARD.BOOLEAN");
    if (tree_kind(t) == T_REF) {
       tree_t decl = tree_ref(t);
       if (tree_kind(decl) == T_ENUM_LIT
@@ -425,6 +442,7 @@ class_t class_of(tree_t t)
       return C_FILE;
    case T_PROCESS:
    case T_BLOCK:
+   case T_FOR:
       return C_LABEL;
    case T_COMPONENT:
       return C_COMPONENT;
@@ -436,6 +454,8 @@ class_t class_of(tree_t t)
       return class_of(tree_value(t));
    case T_PACKAGE:
       return C_PACKAGE;
+   case T_LIBRARY:
+      return C_LIBRARY;
    default:
       fatal("missing class_of for %s", tree_kind_str(tree_kind(t)));
    }
@@ -450,6 +470,7 @@ bool class_has_type(class_t c)
    case C_COMPONENT:
    case C_CONFIGURATION:
    case C_PACKAGE:
+   case C_LIBRARY:
       return false;
    default:
       return true;
@@ -549,7 +570,14 @@ tree_t make_default_value(type_t type, const loc_t *loc)
       return type_dim(type, 0).left;
 
    case T_ENUM:
-      return make_ref(type_enum_literal(base, 0));
+      {
+         int64_t val = 0;
+         const bool folded = folded_int(type_dim(type, 0).left, &val);
+         if (folded)
+            return make_ref(type_enum_literal(base, (unsigned) val));
+         else
+            return type_dim(type, 0).left;
+      }
 
    case T_RECORD:
       {
@@ -746,7 +774,7 @@ void intern_strings(void)
    driver_init_i    = ident_new("driver_init");
    static_i         = ident_new("static");
    mangled_i        = ident_new("mangled");
-   last_value_i     = ident_new("last_value");
+   last_value_i     = ident_new("LAST_VALUE");
    elide_bounds_i   = ident_new("elide_bounds");
    null_range_i     = ident_new("null_range");
    deferred_i       = ident_new("deferred");
@@ -755,13 +783,13 @@ void intern_strings(void)
    cond_tag_i       = ident_new("cond_tag");
    sub_cond_i       = ident_new("sub_cond");
    impure_i         = ident_new("impure");
-   elide_bounds_i   = ident_new("elide_bounds");
    range_var_i      = ident_new("range_var");
-   builtin_i        = ident_new("builtin");
-   last_value_i     = ident_new("last_value");
    postponed_i      = ident_new("postponed");
    work_i           = ident_new("WORK");
    llvm_i           = ident_new("llvm");
    wait_level_i     = ident_new("wait_level");
    impure_io_i      = ident_new("impure_io");
+   simple_name_i    = ident_new("simple_name");
+   conversion_i     = ident_new("conversion");
+   std_i            = ident_new("STD");
 }

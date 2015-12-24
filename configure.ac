@@ -70,6 +70,12 @@ AX_CHECK_LINK_FLAG([-rdynamic],
   [RDYNAMIC_FLAG=""])
 AC_SUBST(RDYNAMIC_FLAG)
 
+AX_CHECK_COMPILE_FLAG([-fPIC],
+  [PIC_FLAG="-fPIC"],
+  [PIC_FLAG=""],
+  [-Werror])
+AC_SUBST(PIC_FLAG)
+
 AX_PROG_FLEX([], [AC_MSG_ERROR(GNU Flex not found)])
 
 case $host_os in
@@ -116,7 +122,27 @@ fi
 
 AC_CHECK_LIB([z], [deflate], [], [AC_MSG_ERROR(zlib not found)])
 
-# fst/fstapi.c can use pthread to write FST in parallel if HAVE_LIBPTHREAD
+AC_ARG_ENABLE([fst_debug],
+  [AC_HELP_STRING([--enable-fst-debug],
+    [Enable FST debugging (for development only)])],
+  [enable_fst_debug=$enableval],
+  [enable_fst_debug=no])
+if test x$enable_fst_debug = xyes ; then
+  AC_DEFINE_UNQUOTED([FST_DEBUG], [1],
+    [Enable FST debugging (for development only)])
+fi
+
+AC_ARG_ENABLE([fst_glitch_removal],
+  [AC_HELP_STRING([--enable-fst-glitch-removal],
+    [Enable FST glitch removal (has performance impact)])],
+  [enable_fst_glitch_removal=$enableval],
+  [enable_fst_glitch_removal=no])
+if test x$enable_fst_glitch_removal = xyes ; then
+  AC_DEFINE_UNQUOTED([FST_REMOVE_DUPLICATE_VC], [1],
+    [Enable FST glitch removal (has performance impact)])
+fi
+
+# thirdparty/fstapi.c can use pthread to write FST in parallel if HAVE_LIBPTHREAD
 # and FST_WRITER_PARALLEL is defined.
 # FIXME: -lpthread may be in LLVM_LDFLAGS already.
 AC_ARG_ENABLE([fst_pthread],
@@ -136,7 +162,7 @@ fi
 
 AM_CONDITIONAL([FST_WRITER_PARALLEL], [test x$ax_pthread_ok = xyes])
 
-# fst/fstapi.c can use Judy instead of builtin Jenkins if _WAVE_HAVE_JUDY is defined.
+# thirdparty/fstapi.c can use Judy instead of builtin Jenkins if _WAVE_HAVE_JUDY is defined.
 AC_ARG_ENABLE([fst_judy],
   [AS_HELP_STRING([--enable-fst-judy],
     [Use Judy instead of builtin Jenkins for FST])],
@@ -147,7 +173,7 @@ if test x$enable_fst_judy = xyes ; then
   AC_DEFINE_UNQUOTED([_WAVE_HAVE_JUDY], [1], [Internal definition of GTKWave for Judy])
 fi
 
-AX_LLVM_C([engine bitreader bitwriter])
+AX_LLVM_C([engine bitreader bitwriter ipo linker])
 AM_CONDITIONAL([FORCE_CXX_LINK], [test ! x$ax_cv_llvm_shared = xyes])
 
 PKG_CHECK_EXISTS([check],

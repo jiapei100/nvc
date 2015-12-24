@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <inttypes.h>
 
+static void bounds_check_assignment(tree_t target, tree_t value);
+
 typedef struct interval interval_t;
 
 struct interval {
@@ -61,6 +63,116 @@ static void bounds_check_literal(tree_t t)
    }
 }
 
+static bool is_out_of_range(tree_t value, range_t range, bool *checked)
+{
+   type_kind_t base_kind = type_base_kind(tree_type(value));
+
+   switch (base_kind) {
+   case T_INTEGER:
+   case T_PHYSICAL:
+      {
+         int64_t ival, low, high;
+         *checked = folded_int(value, &ival) && folded_bounds(range, &low, &high);
+         if (*checked && (ival < low || ival > high))
+            return true;
+
+         return false;
+      }
+      break;
+   case T_REAL:
+      {
+         double rval, low, high;
+         *checked = folded_real(value, &rval) && folded_bounds_real(range, &low, &high);
+         if (*checked && (rval < low || rval > high))
+            return true;
+
+         return false;
+      }
+      break;
+   case T_ENUM:
+      {
+         unsigned uval;
+         int64_t low, high;
+         *checked = folded_enum(value, &uval) && folded_bounds(range, &low, &high);
+         if (*checked && (((int64_t) uval < low) || ((int64_t) uval > high)))
+            return true;
+
+         return false;
+      }
+      break;
+   default:
+      return false;
+   }
+}
+
+static const char *value_str(tree_t value)
+{
+   static const int BUF_SZ = 64;
+   const type_t vtype = tree_type(value);
+   const type_kind_t base_kind = type_base_kind(vtype);
+   char *buf = get_fmt_buf(BUF_SZ);
+
+   buf[0] = '\0';
+
+   switch (base_kind) {
+   case T_INTEGER:
+      {
+         int64_t ival;
+         const bool is_folded = folded_int(value, &ival);
+         assert(is_folded);
+         snprintf(buf, BUF_SZ, "%"PRIi64, ival);
+      }
+      break;
+   case T_PHYSICAL:
+      {
+         int64_t ival, max_unit_value = 0;
+         const bool is_folded = folded_int(value, &ival);
+         assert(is_folded);
+         const unsigned  nunits = type_units(vtype);
+         tree_t max_unit = NULL;
+
+         // Find the largest unit that evenly divides the given value
+         for (unsigned u = 0; u < nunits; u++)
+         {
+            tree_t unit = type_unit(vtype, u);
+            int64_t unit_value;
+            const bool is_folded = folded_int(tree_value(unit), &unit_value);
+            assert(is_folded);
+            if ((ival % unit_value == 0) && (unit_value > max_unit_value))
+            {
+               max_unit = unit;
+               max_unit_value = unit_value;
+            }
+         }
+         assert(max_unit);
+         ival = ival / max_unit_value;
+         snprintf(buf, BUF_SZ, "%"PRIi64" %s", ival, istr(tree_ident(max_unit)));
+      }
+      break;
+   case T_REAL:
+      {
+         double rval;
+         const bool is_folded = folded_real(value, &rval);
+         assert(is_folded);
+         snprintf(buf, BUF_SZ, "%lf", rval);
+      }
+      break;
+   case T_ENUM:
+      {
+         unsigned uval;
+         const bool is_folded = folded_enum(value, &uval);
+         assert(is_folded);
+         type_t base = type_base_recur(vtype);
+         return istr(tree_ident(type_enum_literal(base, uval)));
+      }
+      break;
+   default:
+      break;
+   }
+
+   return (const char *) buf;
+}
+
 static tree_t bounds_check_call_args(tree_t t)
 {
    tree_t decl = tree_ref(t);
@@ -90,58 +202,37 @@ static tree_t bounds_check_call_args(tree_t t)
             range_t formal_r = type_dim(ftype, j);
             range_t actual_r = type_dim(atype, j);
 
-            int64_t f_left, f_right, a_left, a_right;
+            int64_t f_len, a_len;
 
             const bool folded =
-               folded_int(formal_r.left, &f_left)
-               && folded_int(formal_r.right, &f_right)
-               && folded_int(actual_r.left, &a_left)
-               && folded_int(actual_r.right, &a_right);
+               folded_length(formal_r, &f_len)
+               && folded_length(actual_r, &a_len);
 
             if (!folded)
                continue;
 
-            const int f_len = (actual_r.kind == RANGE_TO)
-               ? a_right - a_left + 1: a_left - a_right + 1;
-            const int a_len = (formal_r.kind == RANGE_TO)
-               ? f_right - f_left + 1 : f_left - f_right + 1;
-
             if (f_len != a_len) {
                if (ndims > 1)
-                  bounds_error(param, "actual length %d for dimension %d does "
-                               "not match formal length %d",
+                  bounds_error(param, "actual length %"PRIi64" for dimension %d does "
+                               "not match formal length %"PRIi64,
                                a_len, j + 1, f_len);
                else
-                  bounds_error(param, "actual length %d does not match formal "
-                               "length %d", a_len, f_len);
+                  bounds_error(param, "actual length %"PRIi64" does not match formal "
+                               "length %"PRIi64, a_len, f_len);
             }
          }
       }
-      else if (type_is_integer(ftype)) {
-         int64_t ival;
-         if (!folded_int(value, &ival))
-            continue;
-
+      else if (type_is_scalar(ftype)) {
          range_t r = type_dim(ftype, 0);
+         bool checked;
 
-         int64_t low, high;
-         if (!folded_bounds(r, &low, &high))
-            continue;
-
-         if ((ival < low) || (ival > high))
-            bounds_error(value, "value %"PRIi64" out of bounds %"PRIi64" %s "
-                         "%"PRIi64" for parameter %s", ival,
-                         (r.kind == RANGE_TO) ? low : high,
+         if (is_out_of_range(value, r, &checked))
+            bounds_error(value, "value %s out of bounds %s %s %s for "
+                         "parameter %s", value_str(value),
+                         value_str(r.left),
                          (r.kind == RANGE_TO) ? "to" : "downto",
-                         (r.kind == RANGE_TO) ? high : low,
-                         istr(tree_ident(port)));
+                         value_str(r.right), istr(tree_ident(port)));
       }
-      else if (type_is_real(ftype)) {
-         // TODO
-      }
-      else if (type_is_enum(ftype)) {
-         // TODO
-     }
    }
 
    return t;
@@ -163,32 +254,21 @@ static void bounds_check_array_ref(tree_t t)
    const int nparams = tree_params(t);
    for (int i = 0; i < nparams; i++) {
       tree_t p = tree_param(t, i);
-
-      int64_t index;
-      if (!folded_int(tree_value(p), &index))
-         continue;
-
-      range_t b = type_dim(value_type, i);
-
-      if ((b.kind != RANGE_TO) && (b.kind != RANGE_DOWNTO))
-         continue;
-
-      int64_t left, right;
-      if (folded_int(b.left, &left) && folded_int(b.right, &right)) {
-         const int64_t low  = (b.kind == RANGE_TO) ? left : right;
-         const int64_t high = (b.kind == RANGE_TO) ? right : left;
-         if ((index < low) || (index > high)) {
-            const char *name = (tree_kind(value) == T_REF)
-               ? istr(tree_ident(value)) : NULL;
-            bounds_error(t, "array %s%sindex %"PRIi64" out of bounds "
-                         "%"PRIi64" %s %"PRIi64,
-                         name ? name : "", name ? " " : "",
-                         index, left,
-                         (b.kind == RANGE_TO) ? "to" : "downto", right);
-         }
-         else
-            nstatic++;
+      tree_t pvalue = tree_value(p);
+      range_t r = type_dim(value_type, i);
+      bool checked;
+      if (is_out_of_range(pvalue, r, &checked)) {
+         const char *name = (tree_kind(value) == T_REF)
+            ? istr(tree_ident(value)) : NULL;
+         bounds_error(t, "array %s%sindex %s out of bounds %s %s %s",
+                      name ? name : "", name ? " " : "",
+                      value_str(pvalue), value_str(r.left),
+                      (r.kind == RANGE_TO) ? "to" : "downto",
+                      value_str(r.right));
       }
+
+      if (checked)
+         nstatic++;
    }
 
    if (nstatic == nparams)
@@ -243,6 +323,7 @@ static void bounds_within(tree_t i, range_kind_t kind, const char *what,
                           int64_t low, int64_t high)
 {
    int64_t folded;
+   unsigned folded_u;
    if (folded_int(i, &folded)) {
       if (folded < low || folded > high)
          bounds_error(i, "%s index %"PRIi64" out of bounds %"PRIi64
@@ -250,6 +331,20 @@ static void bounds_within(tree_t i, range_kind_t kind, const char *what,
                       (kind == RANGE_TO) ? low : high,
                       (kind == RANGE_TO) ? "to" : "downto",
                       (kind == RANGE_TO) ? high : low);
+   }
+   else if (folded_enum(i, &folded_u)) {
+      if (folded_u < low || folded_u > high) {
+         type_t base = type_base_recur(tree_type(i));
+         tree_t value_lit = type_enum_literal(base, folded_u);
+         tree_t left_lit  = type_enum_literal(base, (kind == RANGE_TO) ? low : high);
+         tree_t right_lit = type_enum_literal(base, (kind == RANGE_TO) ? high : low);
+
+         bounds_error(i, "%s index %s out of bounds %s %s %s", what,
+                      istr(tree_ident(value_lit)),
+                      istr(tree_ident(left_lit)),
+                      (kind == RANGE_TO) ? "to" : "downto",
+                      istr(tree_ident(right_lit)));
+      }
    }
 }
 
@@ -263,8 +358,8 @@ static void bounds_check_aggregate(tree_t t)
 
    // Find the tightest bounds for the index
 
-   int64_t low  = -INT64_MAX;
-   int64_t high = INT64_MAX;
+   int64_t low, high;
+   bool have_bounds = false;
 
    range_t type_r = type_dim(type, 0);
 
@@ -276,20 +371,15 @@ static void bounds_check_aggregate(tree_t t)
       assert(type_kind(base) == T_UARRAY);
 
       type_t index = type_index_constr(base, 0);
-      if (type_kind(index) == T_ENUM)
-         return;   // TODO
 
       range_t base_r = type_dim(index, 0);
 
-      if ((tree_kind(base_r.left) == T_LITERAL)
-          && (tree_kind(base_r.right) == T_LITERAL))
-         range_bounds(base_r, &low, &high);
+      have_bounds = folded_bounds(base_r, &low, &high);
    }
-   else if ((tree_kind(type_r.left) == T_LITERAL)
-            && (tree_kind(type_r.right) == T_LITERAL))
-      range_bounds(type_r, &low, &high);
+   else
+      have_bounds = folded_bounds(type_r, &low, &high);
 
-   if ((low == -INT64_MAX) && (high == INT64_MAX))
+   if (!have_bounds)
       return;
 
    // Check for out of bounds indexes
@@ -368,43 +458,73 @@ static void bounds_check_decl(tree_t t)
 {
    type_t type = tree_type(t);
 
-   if (type_is_array(type) && (type_kind(type) != T_UARRAY)) {
-      // Check folded range does not violate index constraints
+   if (tree_has_value(t))
+      bounds_check_assignment(t, tree_value(t));
 
-      const int ndims = type_dims(type);
+   const bool is_constrained_array_subtype =
+      type_is_array(type)
+      && !type_is_unconstrained(type)
+      && type_kind(type) == T_SUBTYPE;
+
+   if (is_constrained_array_subtype) {
+      // Check folded range does not violate index constraints of base type
+
+      type_t base = type_base(type);
+
+      const int ndims = array_dimension(base);
       for (int i = 0; i < ndims; i++) {
          range_t dim = type_dim(type, i);
 
-         type_t cons = tree_type(dim.left);
+         type_t cons = index_type_of(base, i);
+         type_t cons_base  = type_base_recur(cons);
 
-         if (type_kind(cons) == T_ENUM)
-            continue;    // TODO: checking for enum constraints
+         const bool is_enum = (type_kind(cons_base) == T_ENUM);
 
          range_t bounds = type_dim(cons, 0);
 
          // Only check here if range can be determined to be non-null
 
-         int64_t dim_left, bounds_left;
-         int64_t dim_right, bounds_right;
+         int64_t dim_low, bounds_low;
+         int64_t dim_high, bounds_high;
 
          const bool is_static =
-            folded_int(dim.left, &dim_left)
-            && folded_int(bounds.left, &bounds_left)
-            && folded_int(dim.right, &dim_right)
-            && folded_int(bounds.right, &bounds_right);
+            folded_bounds(dim, &dim_low, &dim_high)
+            && folded_bounds(bounds, &bounds_low, &bounds_high);
 
          const bool is_null =
-            (dim.kind == RANGE_TO && dim_left > dim_right)
-            || (dim.kind == RANGE_DOWNTO && dim_left < dim_right);
+            dim_low > dim_high || bounds_low > bounds_high;
 
          if (is_static && !is_null) {
-            if (dim_left < bounds_left)
-               bounds_error(dim.left, "left index %"PRIi64" violates "
-                            "constraint %s", dim_left, type_pp(cons));
+            if (dim_low < bounds_low) {
+               if (is_enum) {
+                  tree_t lit = type_enum_literal(cons_base, (unsigned) dim_low);
+                  bounds_error((dim.kind == RANGE_TO) ? dim.left : dim.right,
+                               "%s index %s violates constraint %s",
+                               (dim.kind == RANGE_TO) ? "left" : "right",
+                               istr(tree_ident(lit)), type_pp(cons));
+               }
+               else
+                  bounds_error((dim.kind == RANGE_TO) ? dim.left : dim.right,
+                               "%s index %"PRIi64" violates constraint %s",
+                               (dim.kind == RANGE_TO) ? "left" : "right",
+                               dim_low, type_pp(cons));
 
-            if (dim_right > bounds_right)
-               bounds_error(dim.right, "right index %"PRIi64" violates "
-                            "constraint %s", dim_right, type_pp(cons));
+            }
+
+            if (dim_high > bounds_high) {
+               if (is_enum) {
+                  tree_t lit = type_enum_literal(cons_base, (unsigned) dim_high);
+                  bounds_error((dim.kind == RANGE_TO) ? dim.right : dim.left,
+                               "%s index %s violates constraint %s",
+                               (dim.kind == RANGE_TO) ? "right" : "left",
+                               istr(tree_ident(lit)), type_pp(cons));
+               }
+               else
+                  bounds_error((dim.kind == RANGE_TO) ? dim.right : dim.left,
+                               "%s index %"PRIi64" violates constraint %s",
+                               (dim.kind == RANGE_TO) ? "right" : "left",
+                               dim_high, type_pp(cons));
+            }
          }
       }
    }
@@ -440,80 +560,59 @@ static void bounds_check_assignment(tree_t target, tree_t value)
       }
    }
 
-   const bool check_scalar_subtype_range =
-      !type_is_array(target_type)
-      && !type_is_record(target_type)
-      && (type_kind(target_type) == T_SUBTYPE);
-
-   if (check_scalar_subtype_range) {
+   if (type_is_scalar(target_type)) {
       range_t r = type_dim(target_type, 0);
+      bool checked;
 
-      int64_t ivalue;
-      if (folded_int(value, &ivalue)) {
-         int64_t left, right;
-         if (folded_int(r.left, &left) && folded_int(r.right, &right)) {
-            switch (r.kind) {
-            case RANGE_TO:
-               if ((ivalue < left) || (ivalue > right))
-                  bounds_error(value, "value %"PRIi64" out of target bounds %"
-                               PRIi64" to %"PRIi64, ivalue, left, right);
-               break;
-
-            case RANGE_DOWNTO:
-               if ((ivalue > left) || (ivalue < right))
-                  bounds_error(value, "value %"PRIi64" out of target bounds %"
-                               PRIi64" downto %"PRIi64, ivalue, left, right);
-               break;
-
-            default:
-               break;
-            }
-         }
-      }
-
-      unsigned pos;
-      if (folded_enum(value, &pos)) {
-         unsigned left, right;
-         if (folded_enum(r.left, &left) && folded_enum(r.right, &right)) {
-            type_t value_base  = type_base_recur(value_type);
-            type_t target_base = type_base_recur(target_type);
-
-            tree_t value_lit = type_enum_literal(value_base, pos);
-            tree_t left_lit  = type_enum_literal(target_base, left);
-            tree_t right_lit = type_enum_literal(target_base, right);
-
-            switch (r.kind) {
-            case RANGE_TO:
-               if ((pos < left) || (pos > right))
-                  bounds_error(value, "value %s out of target bounds %s to %s",
-                               istr(tree_ident(value_lit)),
-                               istr(tree_ident(left_lit)),
-                               istr(tree_ident(right_lit)));
-               break;
-
-            case RANGE_DOWNTO:
-               if ((pos > left) || (pos < right))
-                  bounds_error(value, "value %s out of target bounds %s "
-                               "downto %s", istr(tree_ident(value_lit)),
-                               istr(tree_ident(left_lit)),
-                               istr(tree_ident(right_lit)));
-               break;
-
-            default:
-               break;
-            }
-         }
+      if (is_out_of_range(value, r, &checked)) {
+         bounds_error(value, "value %s out of target bounds %s %s %s",
+                      value_str(value), value_str(r.left),
+                      (r.kind == RANGE_TO) ? "to" : "downto",
+                      value_str(r.right));
       }
    }
 }
 
 static void bounds_check_signal_assign(tree_t t)
 {
+   int64_t last_delay = 0;
    tree_t target = tree_target(t);
 
    const int nwaves = tree_waveforms(t);
-   for (int i = 0; i < nwaves; i++)
-      bounds_check_assignment(target, tree_value(tree_waveform(t, i)));
+   for (int i = 0; i < nwaves; i++) {
+      tree_t w = tree_waveform(t, i);
+
+      bounds_check_assignment(target, tree_value(w));
+
+      int64_t delay = 0;
+      bool delay_is_known = true;
+      const bool has_delay = tree_has_delay(w);
+
+      if (has_delay) {
+         delay_is_known = folded_int(tree_delay(w), &delay);
+         if (delay_is_known && delay < 0)
+            bounds_error(tree_delay(w), "assignment delay may not be "
+                         "negative");
+      }
+
+      if (i == 0) {
+         int64_t rlimit;
+         if (tree_has_reject(t) && folded_int(tree_reject(t), &rlimit)) {
+            if ((rlimit < 0) && (delay >= 0))
+               bounds_error(tree_reject(t), "rejection limit may not be "
+                            "negative");
+
+            if (rlimit > delay)
+               bounds_error(tree_reject(t), "rejection limit may not be "
+                            "greater than first assignment delay");
+         }
+      } else if (delay_is_known && delay <= last_delay)
+         bounds_error(has_delay ? tree_delay(w) : w, "assignment delays "
+                      "must be in ascending time order");
+
+      // even if the delay isn't known, it has to be at least zero
+      last_delay = delay;
+   }
 }
 
 static void bounds_check_var_assign(tree_t t)
@@ -718,31 +817,17 @@ static void bounds_check_case(tree_t t)
    else if (type_is_array(type)) {
       // Calculate how many values each element has
       type_t elem = type_elem(type);
-      int64_t elemsz = 0;
-      switch (type_kind(elem)) {
-      case T_SUBTYPE:
-      case T_CARRAY:
-      case T_INTEGER:
-         {
-            int64_t low, high;
-            if (!folded_bounds(type_dim(elem, 0), &low, &high))
-               return;
-            elemsz = high - low + 1;
-         }
-         break;
-      case T_ENUM:
-         elemsz = type_enum_literals(elem);
-         break;
-      default:
+      assert(type_is_enum(elem));
+
+      int64_t elemsz;
+      if (!folded_length(type_dim(elem, 0), &elemsz))
          return;
-      }
 
       int64_t length;
       if (!folded_length(type_dim(type, 0), &length))
           return;
 
-      const int64_t expect =
-         elemsz > INT32_MAX ? INT64_MAX : ipow(elemsz, length);
+      const int64_t expect = ipow(elemsz, length);
 
       int64_t have = 0;
       const int nassocs = tree_assocs(t);
@@ -763,13 +848,9 @@ static void bounds_check_case(tree_t t)
          }
       }
 
-      if (have != expect) {
-         if (expect == INT64_MAX)
-            bounds_error(t, "choices do not cover all possible values");
-         else
-            bounds_error(t, "choices cover only %"PRIi64" of %"PRIi64
-                         " possible values", have, expect);
-      }
+      if (have != expect)
+         bounds_error(t, "choices cover only %"PRIi64" of %"PRIi64
+                      " possible values", have, expect);
    }
 }
 
@@ -834,6 +915,14 @@ static void bounds_check_attr_ref(tree_t t)
    }
 }
 
+static void bounds_check_wait(tree_t t)
+{
+   int64_t delay = 0;
+   if (tree_has_delay(t) && folded_int(tree_delay(t), &delay))
+      if (delay < 0)
+         bounds_error(tree_delay(t), "wait timeout may not be negative");
+}
+
 static void bounds_visit_fn(tree_t t, void *context)
 {
    switch (tree_kind(t)) {
@@ -853,6 +942,7 @@ static void bounds_visit_fn(tree_t t, void *context)
    case T_SIGNAL_DECL:
    case T_CONST_DECL:
    case T_VAR_DECL:
+   case T_PORT_DECL:
       bounds_check_decl(t);
       break;
    case T_SIGNAL_ASSIGN:
@@ -872,6 +962,9 @@ static void bounds_visit_fn(tree_t t, void *context)
       break;
    case T_ATTR_REF:
       bounds_check_attr_ref(t);
+      break;
+   case T_WAIT:
+      bounds_check_wait(t);
       break;
    default:
       break;

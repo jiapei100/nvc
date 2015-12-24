@@ -71,6 +71,8 @@ static unsigned parse_relax(const char *str)
          mask |= RELAX_GENERIC_STATIC;
       else if (strcmp(token, "universal-bound") == 0)
          mask |= RELAX_UNIVERSAL_BOUND;
+      else if (strcmp(token, "pure-files") == 0)
+         mask |= RELAX_PURE_FILES;
       else
          fatal("invalid relax option '%s'", token);
 
@@ -427,6 +429,7 @@ static int run(int argc, char **argv)
       { "exit-severity", required_argument, 0, 'x' },
 #if ENABLE_VHPI
       { "load",          required_argument, 0, 'l' },
+      { "vhpi-trace",    no_argument,       0, 'T' },
 #endif
       { 0, 0, 0, 0 }
    };
@@ -457,6 +460,9 @@ static int run(int argc, char **argv)
          fatal("unrecognised run option %s", argv[optind - 1]);
       case 't':
          opt_set_int("rt_trace_en", 1);
+         break;
+      case 'T':
+         opt_set_int("vhpi_trace_en", 1);
          break;
       case 'b':
          mode = BATCH;
@@ -679,6 +685,7 @@ static void set_default_opts(void)
 {
    opt_set_int("rt-stats", 0);
    opt_set_int("rt_trace_en", 0);
+   opt_set_int("vhpi_trace_en", 0);
    opt_set_int("dump-llvm", 0);
    opt_set_int("optimise", 1);
    opt_set_int("native", 0);
@@ -745,6 +752,9 @@ static void usage(void)
           "     --stop-delta=N\tStop after N delta cycles (default %d)\n"
           "     --stop-time=T\tStop after simulation time T (e.g. 5ns)\n"
           "     --trace\t\tTrace simulation events\n"
+#ifdef ENABLE_VHPI
+          "     --vhpi-trace\tTrace VHPI calls and events\n"
+#endif
           " -w, --wave=FILE\tWrite waveform data; file name is optional\n"
           "\n"
           "Dump options:\n"
@@ -941,10 +951,7 @@ int main(int argc, char **argv)
       }
    }
 
-   work = lib_find(work_path, false, false);
-   if (work == NULL)
-      work = lib_new(work_name, work_path);
-
+   work = lib_new(work_name, work_path);
    lib_set_work(work);
 
    argc -= next_cmd - 1;

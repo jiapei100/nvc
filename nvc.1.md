@@ -177,6 +177,9 @@ elaborate command.
    Trace simulation events. This is usually only useful for debugging the
    simulator.
 
+ * `--vhpi-trace`:
+   Trace VHPI calls and events. This can be useful for debugging VHPI plugins.
+
  * `-w, --wave=`_file_:
    Write waveform data to _file_. The file name is optional and if not specified
    will default to the name of the top-level unit with the appropriate extension
@@ -216,6 +219,9 @@ disable certain semantic rule checks.
   must be either numeric literals or attributes. This option
   allows ranges such as `-1 to 1` in VHDL-1993 which otherwise must be written
   `integer'(-1) to 1`.
+
+* `pure-files`:
+  Pure functions are allowed to declare file objects.
 
 ## SELECTING SIGNALS
 

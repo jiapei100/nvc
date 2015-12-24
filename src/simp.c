@@ -71,8 +71,16 @@ static tree_t simp_call_args(tree_t t)
       else if (kind == T_CPCALL)
          tree_set_ident2(new, tree_ident2(t));
 
-      for (int i = 0; i <= last_pos; i++)
-         tree_add_param(new, tree_param(t, i));
+      for (int i = 0; i <= last_pos; i++) {
+         tree_t port  = tree_port(decl, i);
+         tree_t param = tree_param(t, i);
+         tree_t value = tree_value(param);
+
+         if (tree_kind(value) == T_OPEN)
+            value = tree_value(port);
+
+         add_param(new, value, P_POS, NULL);
+      }
 
       for (int i = last_pos + 1; i < nports; i++) {
          tree_t port  = tree_port(decl, i);
@@ -87,7 +95,12 @@ static tree_t simp_call_args(tree_t t)
             assert(tree_kind(ref) == T_REF);
 
             if (name == tree_ident(ref)) {
-               add_param(new, tree_value(p), P_POS, NULL);
+               tree_t value = tree_value(p);
+
+               if (tree_kind(value) == T_OPEN)
+                  value = tree_value(port);
+
+               add_param(new, value, P_POS, NULL);
                found = true;
             }
          }
@@ -218,10 +231,6 @@ static tree_t simp_attr_delayed_transaction(tree_t t, predef_attr_t predef,
    tree_set_loc(s, tree_loc(t));
    tree_set_ident(s, ident_uniq(sig_name));
    tree_set_type(s, tree_type(t));
-   if (tree_has_value(decl))
-      tree_set_value(s, tree_value(decl));
-   else
-      tree_set_value(s, make_default_value(tree_type(t), tree_loc(t)));
 
    tree_t p = tree_new(T_PROCESS);
    tree_set_loc(p, tree_loc(t));
@@ -236,6 +245,11 @@ static tree_t simp_attr_delayed_transaction(tree_t t, predef_attr_t predef,
    switch (predef) {
    case ATTR_DELAYED:
       {
+         if (tree_has_value(decl))
+            tree_set_value(s, tree_value(decl));
+         else
+            tree_set_value(s, make_default_value(tree_type(t), tree_loc(t)));
+
          tree_t delay = tree_value(tree_param(t, 0));
 
          tree_t wave = tree_new(T_WAVEFORM);
@@ -248,6 +262,8 @@ static tree_t simp_attr_delayed_transaction(tree_t t, predef_attr_t predef,
 
    case ATTR_TRANSACTION:
       {
+         tree_set_value(s, make_default_value(tree_type(s), tree_loc(s)));
+
          tree_t not = call_builtin("not", tree_type(r), r, NULL);
 
          tree_t wave = tree_new(T_WAVEFORM);
@@ -826,7 +842,7 @@ static tree_t simp_context_ref(tree_t t, simp_ctx_t *ctx)
    tree_t decl = tree_ref(t);
 
    const int nctx = tree_contexts(decl);
-   for (int i = 0; i < nctx; i++)
+   for (int i = 2; i < nctx; i++)
       tree_add_context(ctx->top, tree_context(decl, i));
 
    return NULL;

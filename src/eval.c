@@ -307,7 +307,7 @@ static void eval_op_fcall(int op, eval_state_t *state)
       ident_t unit_name = ident_runtil(vcode_get_func(op), '.');
       ident_t lib_name = ident_until(unit_name, '.');
 
-      lib_t lib = lib_find(istr(lib_name), true, true);
+      lib_t lib = lib_find(lib_name, false);
       if (lib != NULL) {
          tree_t unit = lib_get(lib, unit_name);
          if (unit != NULL) {

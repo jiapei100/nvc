@@ -237,15 +237,15 @@ bool folded_bool(tree_t t, bool *b)
    return false;
 }
 
-tree_t get_bool_lit(tree_t t, bool v)
+tree_t get_enum_lit(tree_t t, int pos)
 {
-   type_t bool_type = tree_type(t);
-   tree_t lit = type_enum_literal(bool_type, v ? 1 : 0);
+   type_t enum_type = tree_type(t);
+   tree_t lit = type_enum_literal(enum_type, pos);
 
    tree_t b = tree_new(T_REF);
    tree_set_loc(b, tree_loc(t));
    tree_set_ref(b, lit);
-   tree_set_type(b, bool_type);
+   tree_set_type(b, enum_type);
    tree_set_ident(b, tree_ident(lit));
 
    return b;

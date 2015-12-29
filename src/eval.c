@@ -95,9 +95,15 @@ static bool eval_possible(tree_t fcall, eval_flags_t flags)
          // Fall-through
 
       default:
-         if (flags & EVAL_WARN)
-            warn_at(tree_loc(p), "value of parameter %s prevents constant "
-                    "folding", istr(tree_ident(tree_port(tree_ref(fcall), i))));
+         if (flags & EVAL_WARN) {
+            tree_t decl = tree_ref(fcall);
+            if (tree_attr_str(decl, builtin_i) != NULL)
+               warn_at(tree_loc(p), "value of parameter %d prevents constant "
+                       "folding", i + 1);
+            else
+               warn_at(tree_loc(p), "value of parameter %s prevents constant "
+                       "folding", istr(tree_ident(tree_port(decl, i))));
+         }
          return false;
       }
    }
@@ -125,8 +131,11 @@ static bool eval_value_eq(value_t *lhs, value_t *rhs)
    case VALUE_REAL:
       return lhs->real == rhs->real;
 
+   case VALUE_POINTER:
+      return lhs->pointer == rhs->pointer;
+
    default:
-      fatal_trace("invalid value type in %s", __func__);
+      fatal_trace("invalid value type %d in %s", lhs->kind, __func__);
    }
 }
 
@@ -354,6 +363,7 @@ static void eval_op_fcall(int op, eval_state_t *state)
    };
 
    eval_vcode(&new);
+   vcode_state_restore(&vcode_state);
 
    if (new.failed)
       state->failed = true;
@@ -362,8 +372,6 @@ static void eval_op_fcall(int op, eval_state_t *state)
       value_t *dst = eval_get_reg(vcode_get_result(op), state);
       *dst = regs[new.result];
    }
-
-   vcode_state_restore(&vcode_state);
 }
 
 static void eval_op_bounds(int op, eval_state_t *state)
@@ -422,6 +430,14 @@ static void eval_op_store(int op, eval_state_t *state)
    *var = *src;
 }
 
+static void eval_op_load(int op, eval_state_t *state)
+{
+   value_t *dst = eval_get_reg(vcode_get_result(op), state);
+   value_t *var = eval_get_var(vcode_get_address(op), state);
+
+   *dst = *var;
+}
+
 static void eval_op_unwrap(int op, eval_state_t *state)
 {
    value_t *dst = eval_get_reg(vcode_get_result(op), state);
@@ -463,6 +479,32 @@ static void eval_op_memcmp(int op, eval_state_t *state)
          return;
       }
    }
+}
+
+static void eval_op_and(int op, eval_state_t *state)
+{
+   value_t *dst = eval_get_reg(vcode_get_result(op), state);
+   value_t *lhs = eval_get_reg(vcode_get_arg(op, 0), state);
+   value_t *rhs = eval_get_reg(vcode_get_arg(op, 1), state);
+
+   switch (lhs->kind) {
+   case VALUE_INTEGER:
+      dst->kind    = VALUE_INTEGER;
+      dst->integer = lhs->integer & rhs->integer;
+      break;
+
+   default:
+      fatal_trace("invalid value type in %s", __func__);
+   }
+}
+
+static void eval_op_cond(int op, eval_state_t *state)
+{
+   value_t *test = eval_get_reg(vcode_get_arg(op, 0), state);
+
+   const vcode_block_t next = vcode_get_target(op, !(test->integer));
+   vcode_select_block(next);
+   eval_vcode(state);
 }
 
 static void eval_vcode(eval_state_t *state)
@@ -548,6 +590,18 @@ static void eval_vcode(eval_state_t *state)
          eval_op_memcmp(i, state);
          break;
 
+      case VCODE_OP_AND:
+         eval_op_and(i, state);
+         break;
+
+      case VCODE_OP_COND:
+         eval_op_cond(i, state);
+         return;
+
+      case VCODE_OP_LOAD:
+         eval_op_load(i, state);
+         break;
+
       default:
          vcode_dump();
          fatal("cannot evaluate vcode op %s", vcode_op_string(vcode_get_op(i)));
@@ -559,7 +613,8 @@ tree_t eval(tree_t fcall, eval_flags_t flags)
 {
    assert(tree_kind(fcall) == T_FCALL);
 
-   if (!type_is_scalar(tree_type(fcall)))
+   type_t type = tree_type(fcall);
+   if (!type_is_scalar(type))
       return false;
 
    if (!eval_possible(fcall, flags))
@@ -599,7 +654,10 @@ tree_t eval(tree_t fcall, eval_flags_t flags)
 
    switch (result.kind) {
    case VALUE_INTEGER:
-      return get_int_lit(fcall, result.integer);
+      if (type_is_enum(type))
+         return get_enum_lit(fcall, result.integer);
+      else
+         return get_int_lit(fcall, result.integer);
    case VALUE_REAL:
       return get_real_lit(fcall, result.real);
    default:

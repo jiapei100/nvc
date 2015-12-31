@@ -122,17 +122,17 @@ static value_t *eval_get_var(vcode_var_t var, eval_state_t *state)
    return &(state->vars[vcode_var_index(var)]);
 }
 
-static bool eval_value_eq(value_t *lhs, value_t *rhs)
+static int eval_value_cmp(value_t *lhs, value_t *rhs)
 {
    switch (lhs->kind) {
    case VALUE_INTEGER:
-      return lhs->integer == rhs->integer;
+      return lhs->integer - rhs->integer;
 
    case VALUE_REAL:
-      return lhs->real == rhs->real;
+      return lhs->real - rhs->real;
 
    case VALUE_POINTER:
-      return lhs->pointer == rhs->pointer;
+      return lhs->pointer - rhs->pointer;
 
    default:
       fatal_trace("invalid value type %d in %s", lhs->kind, __func__);
@@ -243,8 +243,31 @@ static void eval_op_cmp(int op, eval_state_t *state)
    value_t *lhs = eval_get_reg(vcode_get_arg(op, 0), state);
    value_t *rhs = eval_get_reg(vcode_get_arg(op, 1), state);
 
-   dst->kind    = VALUE_INTEGER;
-   dst->integer = eval_value_eq(lhs, rhs);
+   dst->kind = VALUE_INTEGER;
+
+   switch (vcode_get_cmp(op)) {
+   case VCODE_CMP_EQ:
+      dst->integer = eval_value_cmp(lhs, rhs) == 0;
+      break;
+   case VCODE_CMP_NEQ:
+      dst->integer = eval_value_cmp(lhs, rhs) != 0;
+      break;
+   case VCODE_CMP_GT:
+      dst->integer = eval_value_cmp(lhs, rhs) > 0;
+      break;
+   case VCODE_CMP_GEQ:
+      dst->integer = eval_value_cmp(lhs, rhs) >= 0;
+      break;
+   case VCODE_CMP_LT:
+      dst->integer = eval_value_cmp(lhs, rhs) < 0;
+      break;
+   case VCODE_CMP_LEQ:
+      dst->integer = eval_value_cmp(lhs, rhs) <= 0;
+      break;
+   default:
+      vcode_dump();
+      fatal_trace("cannot handle comparison");
+   }
 }
 
 static void eval_op_cast(int op, eval_state_t *state)
@@ -474,7 +497,7 @@ static void eval_op_memcmp(int op, eval_state_t *state)
    dst->integer = 1;
 
    for (int i = 0; i < len->integer; i++) {
-      if (!eval_value_eq(&(lhs->pointer[i]), &(rhs->pointer[i]))) {
+      if (eval_value_cmp(&(lhs->pointer[i]), &(rhs->pointer[i]))) {
          dst->integer = 0;
          return;
       }

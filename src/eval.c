@@ -1,5 +1,5 @@
 //
-//  Copyright (C) 2013-2015  Nick Gasson
+//  Copyright (C) 2013-2016  Nick Gasson
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -97,9 +97,14 @@ static bool eval_possible(tree_t fcall, eval_flags_t flags)
       default:
          if (flags & EVAL_WARN) {
             tree_t decl = tree_ref(fcall);
-            if (tree_attr_str(decl, builtin_i) != NULL)
-               warn_at(tree_loc(p), "value of parameter %d prevents constant "
-                       "folding", i + 1);
+            if (tree_attr_str(decl, builtin_i) != NULL) {
+               if (tree_ports(decl) == 2)
+                  warn_at(tree_loc(p), "value of %s hand side prevents "
+                          "constant folding", i == 0 ? "left" : "right");
+               else
+                  warn_at(tree_loc(p), "value of parameter prevents constant "
+                          "folding");
+            }
             else
                warn_at(tree_loc(p), "value of parameter %s prevents constant "
                        "folding", istr(tree_ident(tree_port(decl, i))));

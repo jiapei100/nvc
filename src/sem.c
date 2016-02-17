@@ -1,5 +1,5 @@
 //
-//  Copyright (C) 2011-2015  Nick Gasson
+//  Copyright (C) 2011-2016  Nick Gasson
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -1596,6 +1596,11 @@ static bool sem_check_selected_name(ident_t name, tree_t where, tree_t *pdecl)
       prefix = ident_suffix_until(name, '.', prefix);
       if (ident_char(prefix, 0) == '\'')
          continue;
+
+      if (prefix == work_i) {
+         lib = lib_work();   // Work library is always visible
+         continue;
+      }
 
       tree_t decl = scope_find(prefix);
       if (decl == NULL && lib != NULL) {
@@ -6469,6 +6474,7 @@ static bool sem_check_case(tree_t t)
       sem_error(test, "case expression must have a discrete type or one "
                 "dimensional character array type");
 
+   tree_t last = NULL;
    bool ok = true;
    const int nassocs = tree_assocs(t);
    for (int i = 0; i < nassocs; i++) {
@@ -6515,7 +6521,10 @@ static bool sem_check_case(tree_t t)
          sem_error(a, "sorry, this form of choice is not supported");
       }
 
-      ok = sem_check(tree_value(a)) && ok;
+      tree_t stmt = tree_value(a);
+      if (stmt != last)
+         ok = sem_check(stmt) && ok;
+      last = stmt;
    }
 
    return ok;

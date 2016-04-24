@@ -129,6 +129,7 @@ static value_t *eval_get_var(vcode_var_t var, eval_state_t *state)
 
 static int eval_value_cmp(value_t *lhs, value_t *rhs)
 {
+   assert(lhs->kind == rhs->kind);
    switch (lhs->kind) {
    case VALUE_INTEGER:
       return lhs->integer - rhs->integer;
@@ -348,7 +349,8 @@ static void eval_op_fcall(int op, eval_state_t *state)
       if (lib != NULL) {
          tree_t unit = lib_get(lib, unit_name);
          if (unit != NULL) {
-            notef("lowering %s", istr(unit_name));
+            if (state->flags & EVAL_VERBOSE)
+               note_at(tree_loc(state->fcall), "lowering %s", istr(unit_name));
             lower_unit(unit);
 
             if (tree_kind(unit) == T_PACKAGE) {
@@ -399,6 +401,17 @@ static void eval_op_fcall(int op, eval_state_t *state)
       assert(new.result != -1);
       value_t *dst = eval_get_reg(vcode_get_result(op), state);
       *dst = regs[new.result];
+
+      if (state->flags & EVAL_VERBOSE) {
+         const char *name = istr(vcode_get_func(op));
+         const char *nest = istr(tree_ident(state->fcall));
+         if (regs[new.result].kind == VALUE_INTEGER)
+            notef("%s (in %s) returned %"PRIi64, name, nest,
+                  regs[new.result].integer);
+         else
+            notef("%s (in %s) returned %lf", name, nest,
+                  regs[new.result].real);
+      }
    }
 }
 
@@ -444,10 +457,29 @@ static void eval_op_wrap(int op, eval_state_t *state)
    value_t *dst = eval_get_reg(vcode_get_result(op), state);
    value_t *src = eval_get_reg(vcode_get_arg(op, 0), state);
 
-   dst->kind = VALUE_UARRAY;
-   dst->uarray.data = src;
+   assert(src->kind == VALUE_POINTER);
 
-   // XXX: fill in dims
+   dst->kind = VALUE_UARRAY;
+   dst->uarray.data = src->pointer;
+
+   const int ndims = (vcode_count_args(op) - 1) / 3;
+   if (ndims > MAX_DIMS) {
+      state->failed = true;
+      if (state->flags & EVAL_WARN)
+         warn_at(tree_loc(state->fcall), "%d dimensional array prevents "
+                 "constant folding", ndims);
+   }
+   else {
+      dst->uarray.ndims = ndims;
+      for (int i = 0; i < ndims; i++) {
+         dst->uarray.dim[i].left =
+            eval_get_reg(vcode_get_arg(op, (i * 3) + 1), state)->integer;
+         dst->uarray.dim[i].right =
+            eval_get_reg(vcode_get_arg(op, (i * 3) + 2), state)->integer;
+         dst->uarray.dim[i].dir =
+            eval_get_reg(vcode_get_arg(op, (i * 3) + 3), state)->integer;
+      }
+   }
 }
 
 static void eval_op_store(int op, eval_state_t *state)
@@ -501,6 +533,9 @@ static void eval_op_memcmp(int op, eval_state_t *state)
    dst->kind    = VALUE_INTEGER;
    dst->integer = 1;
 
+   assert(lhs->kind == VALUE_POINTER);
+   assert(rhs->kind == VALUE_POINTER);
+
    for (int i = 0; i < len->integer; i++) {
       if (eval_value_cmp(&(lhs->pointer[i]), &(rhs->pointer[i]))) {
          dst->integer = 0;
@@ -524,6 +559,12 @@ static void eval_op_and(int op, eval_state_t *state)
    default:
       fatal_trace("invalid value type in %s", __func__);
    }
+}
+
+static void eval_op_jump(int op, eval_state_t *state)
+{
+   vcode_select_block(vcode_get_target(op, 0));
+   eval_vcode(state);
 }
 
 static void eval_op_cond(int op, eval_state_t *state)
@@ -626,6 +667,10 @@ static void eval_vcode(eval_state_t *state)
          eval_op_cond(i, state);
          return;
 
+      case VCODE_OP_JUMP:
+         eval_op_jump(i, state);
+         return;
+
       case VCODE_OP_LOAD:
          eval_op_load(i, state);
          break;
@@ -640,6 +685,9 @@ static void eval_vcode(eval_state_t *state)
 tree_t eval(tree_t fcall, eval_flags_t flags)
 {
    assert(tree_kind(fcall) == T_FCALL);
+
+   if (flags & EVAL_VERBOSE)
+      flags |= EVAL_WARN;
 
    type_t type = tree_type(fcall);
    if (!type_is_scalar(type))
@@ -672,13 +720,14 @@ tree_t eval(tree_t fcall, eval_flags_t flags)
 
    assert(state.result != -1);
    value_t result = regs[state.result];
-   #if 0
-   fmt_loc(stdout, tree_loc(fcall));
-   if (result.kind == VALUE_INTEGER)
-      printf("result=%"PRIi64"\n", result.integer);
-   else
-      printf("result=%lf\n", result.real);
-   #endif
+
+   if (flags & EVAL_VERBOSE) {
+      const char *name = istr(tree_ident(fcall));
+      if (result.kind == VALUE_INTEGER)
+         note_at(tree_loc(fcall), "%s returned %"PRIi64, name, result.integer);
+      else
+         note_at(tree_loc(fcall), "%s returned %lf", name, result.real);
+   }
 
    switch (result.kind) {
    case VALUE_INTEGER:

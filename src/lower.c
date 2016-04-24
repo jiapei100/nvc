@@ -1390,8 +1390,12 @@ static vcode_reg_t lower_literal(tree_t lit, expr_ctx_t ctx)
 
 static int lower_get_vcode_obj(tree_t t)
 {
-   const void *ptr = hash_get(vcode_objs, t);
-   return (uintptr_t)ptr - 1;
+   if (vcode_objs == NULL)
+      return VCODE_INVALID_REG;
+   else {
+      const void *ptr = hash_get(vcode_objs, t);
+      return (uintptr_t)ptr - 1;
+   }
 }
 
 static void lower_put_vcode_obj(tree_t t, int obj)

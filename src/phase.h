@@ -1,5 +1,5 @@
 //
-//  Copyright (C) 2011-2015  Nick Gasson
+//  Copyright (C) 2011-2016  Nick Gasson
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -21,10 +21,11 @@
 #include "tree.h"
 
 typedef enum {
-   EVAL_BOUNDS = (1 << 0),
-   EVAL_FCALL  = (1 << 1),
-   EVAL_WARN   = (1 << 2),
-   EVAL_LOWER  = (1 << 3),
+   EVAL_BOUNDS  = (1 << 0),
+   EVAL_FCALL   = (1 << 1),
+   EVAL_WARN    = (1 << 2),
+   EVAL_LOWER   = (1 << 3),
+   EVAL_VERBOSE = (1 << 4),
 } eval_flags_t;
 
 // Annotate types and perform other semantics checks on a tree.

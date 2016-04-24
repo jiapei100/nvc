@@ -26,7 +26,8 @@
 #include <stdlib.h>
 #include <inttypes.h>
 
-#define MAX_DIMS 4
+#define MAX_DIMS  4
+#define EVAL_HEAP (4 * 1024)
 
 typedef enum {
    VALUE_REAL,
@@ -50,10 +51,10 @@ typedef struct {
 struct value {
    value_kind_t kind;
    union {
-      double   real;
-      int64_t  integer;
-      value_t *pointer;
-      uarray_t uarray;
+      double    real;
+      int64_t   integer;
+      value_t  *pointer;
+      uarray_t *uarray;
    };
 };
 
@@ -64,6 +65,8 @@ typedef struct {
    tree_t       fcall;
    eval_flags_t flags;
    bool         failed;
+   void        *heap;
+   size_t       halloc;
 } eval_state_t;
 
 static void eval_vcode(eval_state_t *state);
@@ -114,6 +117,25 @@ static bool eval_possible(tree_t fcall, eval_flags_t flags)
    }
 
    return true;
+}
+
+static void *eval_alloc(size_t nbytes, eval_state_t *state)
+{
+   if (state->halloc + nbytes > EVAL_HEAP) {
+      if (state->flags & EVAL_WARN)
+         warn_at(tree_loc(state->fcall), "evaluation heap exhaustion prevents "
+                 "constant folding (%zu allocated, %zu requested",
+                 state->halloc, nbytes);
+      state->failed = true;
+      return NULL;
+   }
+
+   if (state->heap == NULL)
+      state->heap = xmalloc(EVAL_HEAP);
+
+   void *ptr = (char *)state->heap + state->halloc;
+   state->halloc += nbytes;
+   return ptr;
 }
 
 static value_t *eval_get_reg(vcode_reg_t reg, eval_state_t *state)
@@ -394,6 +416,7 @@ static void eval_op_fcall(int op, eval_state_t *state)
 
    eval_vcode(&new);
    vcode_state_restore(&vcode_state);
+   free(new.heap);
 
    if (new.failed)
       state->failed = true;
@@ -447,9 +470,10 @@ static void eval_op_const_array(int op, eval_state_t *state)
    const int nargs = vcode_count_args(op);
 
    dst->kind    = VALUE_POINTER;
-   dst->pointer = xmalloc(sizeof(value_t) * nargs);   // XXX: free this
-   for (int i = 0; i < nargs; i++)
-      dst->pointer[i] = *eval_get_reg(vcode_get_arg(op, i), state);
+   if ((dst->pointer = eval_alloc(sizeof(value_t) * nargs, state))) {
+      for (int i = 0; i < nargs; i++)
+         dst->pointer[i] = *eval_get_reg(vcode_get_arg(op, i), state);
+   }
 }
 
 static void eval_op_wrap(int op, eval_state_t *state)
@@ -460,7 +484,9 @@ static void eval_op_wrap(int op, eval_state_t *state)
    assert(src->kind == VALUE_POINTER);
 
    dst->kind = VALUE_UARRAY;
-   dst->uarray.data = src->pointer;
+   if ((dst->uarray = eval_alloc(sizeof(uarray_t), state)) == NULL)
+      return;
+   dst->uarray->data = src->pointer;
 
    const int ndims = (vcode_count_args(op) - 1) / 3;
    if (ndims > MAX_DIMS) {
@@ -470,13 +496,13 @@ static void eval_op_wrap(int op, eval_state_t *state)
                  "constant folding", ndims);
    }
    else {
-      dst->uarray.ndims = ndims;
+      dst->uarray->ndims = ndims;
       for (int i = 0; i < ndims; i++) {
-         dst->uarray.dim[i].left =
+         dst->uarray->dim[i].left =
             eval_get_reg(vcode_get_arg(op, (i * 3) + 1), state)->integer;
-         dst->uarray.dim[i].right =
+         dst->uarray->dim[i].right =
             eval_get_reg(vcode_get_arg(op, (i * 3) + 2), state)->integer;
-         dst->uarray.dim[i].dir =
+         dst->uarray->dim[i].dir =
             eval_get_reg(vcode_get_arg(op, (i * 3) + 3), state)->integer;
       }
    }
@@ -504,7 +530,7 @@ static void eval_op_unwrap(int op, eval_state_t *state)
    value_t *src = eval_get_reg(vcode_get_arg(op, 0), state);
 
    dst->kind    = VALUE_POINTER;
-   dst->pointer = src->uarray.data;
+   dst->pointer = src->uarray->data;
 }
 
 static void eval_op_uarray_len(int op, eval_state_t *state)
@@ -513,9 +539,9 @@ static void eval_op_uarray_len(int op, eval_state_t *state)
    value_t *src = eval_get_reg(vcode_get_arg(op, 0), state);
 
    const int dim = vcode_get_dim(op);
-   const int64_t left = src->uarray.dim[dim].left;
-   const int64_t right = src->uarray.dim[dim].right;
-   const range_kind_t dir = src->uarray.dim[dim].dir;
+   const int64_t left = src->uarray->dim[dim].left;
+   const int64_t right = src->uarray->dim[dim].right;
+   const range_kind_t dir = src->uarray->dim[dim].dir;
 
    const int64_t len = (dir == RANGE_TO ? right - left : left - right) + 1;
 
@@ -710,10 +736,11 @@ tree_t eval(tree_t fcall, eval_flags_t flags)
       .result = -1,
       .fcall  = fcall,
       .failed = false,
-      .flags  = flags
+      .flags  = flags,
    };
 
    eval_vcode(&state);
+   free(state.heap);
 
    if (state.failed)
       return fcall;

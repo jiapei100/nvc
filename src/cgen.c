@@ -55,7 +55,7 @@ typedef struct {
    LLVMValueRef size;
 } size_list_t;
 
-DECLARE_AND_DEFINE_ARRAY(size_list);
+DECLARE_AND_DEFINE_ARRAY(size_list)
 
 static LLVMModuleRef  module = NULL;
 static LLVMBuilderRef builder = NULL;
@@ -3484,10 +3484,9 @@ static LLVMValueRef cgen_support_fn(const char *name)
                                             args, ARRAY_LEN(args), false));
    }
    else if (strcmp(name, "_private_stack") == 0) {
-      LLVMTypeRef args[0] = {};
       fn = LLVMAddFunction(module, "_private_stack",
                            LLVMFunctionType(LLVMVoidType(),
-                                            args, ARRAY_LEN(args), false));
+                                            NULL, 0, false));
    }
 
    if (fn != NULL)

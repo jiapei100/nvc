@@ -92,8 +92,8 @@ START_TEST(test_ports)
       { 148, "actual must be globally static expression" },
       { 155, "no visible declaration for Q" },
       { 163, "no visible declaration for U" },
-      { 168, "formal name must be static" },
-      { 177, "formal name must be static" },
+      { 168, "formal name must be locally static" },
+      { 177, "formal name must be locally static" },
       { 185, "no visible declaration for HELLO" },
       { 217, "port O of unconstrained type INT_VEC cannot be unconnected" },
       { 221, "type of actual universal real does not match type INTEGER" },
@@ -797,6 +797,7 @@ START_TEST(test_static)
       { 36, "case choice must be locally static" },
       { 42, "case choice must be locally static" },
       { 65, "actual must be globally static expression or locally static" },
+      { 85, "formal name must be locally static" },
       { -1, NULL }
    };
    expect_errors(expect);
@@ -1638,6 +1639,22 @@ START_TEST(test_issue276)
 }
 END_TEST
 
+START_TEST(test_dwlau)
+{
+   input_from_file(TESTDIR "/sem/dwlau.vhd");
+
+   const error_t expect[] = {
+      { 20, "no suitable overload for operator \"*\"" },
+      { -1, NULL }
+   };
+   expect_errors(expect);
+
+   parse_and_check(T_ENTITY, T_ARCH);
+
+   fail_unless(sem_errors() == ARRAY_LEN(expect) - 1);
+}
+END_TEST
+
 int main(void)
 {
    Suite *s = suite_create("sem");
@@ -1719,6 +1736,7 @@ int main(void)
    tcase_add_test(tc_core, test_issue226);
    tcase_add_test(tc_core, test_issue197);
    tcase_add_test(tc_core, test_issue276);
+   tcase_add_test(tc_core, test_dwlau);
    suite_add_tcase(s, tc_core);
 
    return nvc_run_test(s);

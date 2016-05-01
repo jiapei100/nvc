@@ -26,6 +26,13 @@ Report bugs using the [GitHub issue tracker](https://github.com/nickg/nvc/issues
 NVC is developed on Debian Linux and has been reported to work on OS X
 and Windows under Cygwin. Ports to other Unix-like systems are welcome.
 
+NVC has both a release branch and a development master branch. The master branch
+should be stable enough for day-to-day use and has comprehensive regression tests,
+but the release branch is more suitable for third party packaging. The latest
+released version is
+[1.0.0](https://github.com/nickg/nvc/releases/download/r1.0.0/nvc-1.0.0.tar.gz). Significant
+changes since the last release are detailed in [HISTORY.md](HISTORY.md).
+
 To build from a Git clone:
 
     ./autogen.sh
@@ -35,8 +42,14 @@ To build from a Git clone:
     make
     make install
 
-Generating the configure script requires autoconf and automake
-version 1.11 or later.
+Generating the configure script requires autoconf 2.63 and automake 1.11 or later.
+
+To build from a released tarball:
+
+    ./tools/fetch-ieee.sh
+    ./configure
+    make
+    sudo make install
 
 To use a specific version of LLVM add `--with-llvm=/path/to/llvm-config`
 to the configure command. LLVM 3.0 or later is required.

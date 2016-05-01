@@ -548,7 +548,6 @@ START_TEST(test_signal1)
          { VCODE_OP_CONST, .value = 0 },
          { VCODE_OP_NETS, .name = ":signal1:x" },
          { VCODE_OP_CONST, .value = 6 },
-         { VCODE_OP_CONST, .value = 0 },
          { VCODE_OP_CONST, .value = 1 },
          { VCODE_OP_SCHED_WAVEFORM },
          { VCODE_OP_WAIT, .target = 2 }
@@ -1257,7 +1256,6 @@ START_TEST(test_signal4)
       { VCODE_OP_CONST, .value = 0 },
       { VCODE_OP_NETS, .name = ":signal4:s" },
       { VCODE_OP_CONST, .value = 4 },
-      { VCODE_OP_CONST, .value = 0 },
       { VCODE_OP_SCHED_WAVEFORM },
       { VCODE_OP_COPY },
       { VCODE_OP_WAIT, .target = 2 }
@@ -1295,7 +1293,6 @@ START_TEST(test_staticwait)
    EXPECT_BB(1) = {
       { VCODE_OP_CONST, .value = 0 },
       { VCODE_OP_NETS, .name = ":staticwait:x" },
-      { VCODE_OP_CONST, .value = 0 },
       { VCODE_OP_CONST, .value = 0 },
       { VCODE_OP_CONST, .value = 1 },
       { VCODE_OP_SCHED_WAVEFORM },
@@ -2138,6 +2135,16 @@ START_TEST(test_issue125)
 }
 END_TEST
 
+START_TEST(test_access_bug)
+{
+   input_from_file(TESTDIR "/lower/access_bug.vhd");
+
+   tree_t e = run_elab();
+   opt(e);
+   lower_unit(e);
+}
+END_TEST
+
 START_TEST(test_rectype)
 {
    input_from_file(TESTDIR "/lower/rectype.vhd");
@@ -2301,7 +2308,6 @@ START_TEST(test_sigvar)
          { VCODE_OP_UARRAY_LEN },
          { VCODE_OP_UARRAY_LEN },
          { VCODE_OP_ARRAY_SIZE },
-         { VCODE_OP_CONST, .value = 0 },
          { VCODE_OP_UNWRAP },
          { VCODE_OP_VEC_LOAD },
          { VCODE_OP_SCHED_WAVEFORM },
@@ -2461,6 +2467,7 @@ int main(void)
    tcase_add_test(tc, test_issue134);
    tcase_add_test(tc, test_issue136);
    tcase_add_test(tc, test_issue125);
+   tcase_add_test(tc, test_access_bug);
    tcase_add_test(tc, test_rectype);
    tcase_add_test(tc, test_issue149);
    tcase_add_test(tc, test_issue158);

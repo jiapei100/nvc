@@ -36,6 +36,7 @@ typedef struct defer_check defer_check_t;
 typedef struct import_list import_list_t;
 
 typedef bool (*defer_fn_t)(tree_t t);
+typedef bool (*static_fn_t)(tree_t t);
 
 struct defer_check {
    defer_check_t *next;
@@ -106,7 +107,7 @@ static bool sem_locally_static(tree_t t);
 static bool sem_globally_static(tree_t t);
 static tree_t sem_check_lvalue(tree_t t);
 static bool sem_check_type(tree_t t, type_t *ptype);
-static bool sem_static_name(tree_t t);
+static bool sem_static_name(tree_t t, static_fn_t check_fn);
 static bool sem_check_range(range_t *r, type_t context);
 static bool sem_check_attr_ref(tree_t t, bool allow_range);
 static type_t sem_implicit_dereference(tree_t t, get_fn_t get, set_fn_t set);
@@ -2279,7 +2280,7 @@ static bool sem_check_alias(tree_t t)
       if (!sem_check(value))
          return false;
 
-      if (!sem_static_name(value))
+      if (!sem_static_name(value, sem_globally_static))
          sem_error(value, "aliased name is not static");
 
       if (type != NULL) {
@@ -2610,7 +2611,7 @@ static bool sem_check_sensitivity(tree_t t)
                    istr(tree_ident(decl)));
       }
 
-      if (!sem_static_name(r))
+      if (!sem_static_name(r, sem_globally_static))
          sem_error(r, "name in sensitivity list is not static");
    }
 
@@ -3178,7 +3179,7 @@ static bool sem_check_signal_target(tree_t target)
          if (!sem_check_signal_target(value))
             return false;
 
-         if (!sem_static_name(value))
+         if (!sem_static_name(value, sem_globally_static))
             sem_error(value, "aggregate element must be locally static name");
 
          assoc_kind_t kind = tree_subkind(a);
@@ -3258,7 +3259,7 @@ static bool sem_check_signal_assign(tree_t t)
    if (!sem_check_signal_target(target))
       return false;
 
-   if (!sem_check_reject(tree_reject(t)))
+   if (tree_has_reject(t) && !sem_check_reject(tree_reject(t)))
       return false;
 
    return true;
@@ -3296,7 +3297,7 @@ static bool sem_check_cassign(tree_t t)
             sem_error(test, "type of condition must be BOOLEAN");
       }
 
-      if (!sem_check_reject(tree_reject(c)))
+      if (tree_has_reject(c) && !sem_check_reject(tree_reject(c)))
          return false;
 
       if (!sem_check_waveforms(c, tree_type(target)))
@@ -5161,21 +5162,6 @@ static bool sem_check_ref(tree_t t)
    return true;
 }
 
-static tree_t sem_find_record_field(tree_t rref)
-{
-   ident_t fname = tree_ident(rref);
-   type_t value_type = tree_type(tree_value(rref));
-
-   const int nfields = type_fields(value_type);
-   for (int i = 0; i < nfields; i++) {
-      tree_t field = type_field(value_type, i);
-      if (tree_ident(field) == fname)
-         return field;
-   }
-
-   return NULL;
-}
-
 static bool sem_check_record_ref(tree_t t)
 {
    tree_t value = tree_value(t);
@@ -5183,11 +5169,17 @@ static bool sem_check_record_ref(tree_t t)
       return false;
 
    type_t value_type = tree_type(value);
+
+   if (type_is_access(value_type)) {
+       // Convert implicit dereference such as PTR'X to PTR.ALL'X
+       value_type = sem_implicit_dereference(t, tree_value, tree_set_value);
+    }
+
    if (!type_is_record(value_type))
       sem_error(value, "expected record type but found %s",
                 sem_type_str(value_type));
 
-   tree_t field = sem_find_record_field(t);
+   tree_t field = find_record_field(t);
    if (field == NULL)
       sem_error(t, "record type %s has no field %s",
                 sem_type_str(value_type), istr(tree_ident(t)));
@@ -5204,7 +5196,7 @@ static type_t sem_implicit_dereference(tree_t t, get_fn_t get, set_fn_t set)
    tree_t value = get(t);
 
    type_t type = tree_type(value);
-   assert(type_kind(type) == T_ACCESS);
+   assert(type_is_access(type));
 
    type_t access = type_access(type);
 
@@ -5226,7 +5218,7 @@ static bool sem_check_array_ref(tree_t t)
 
    type_t type = tree_type(tree_value(t));
 
-   if (type_kind(type) == T_ACCESS)
+   if (type_is_access(type))
       type = sem_implicit_dereference(t, tree_value, tree_set_value);
 
    if (!type_is_array(type))
@@ -5280,7 +5272,7 @@ static bool sem_check_array_slice(tree_t t)
 
    type_t array_type = tree_type(tree_value(t));
 
-   if (type_kind(array_type) == T_ACCESS)
+   if (type_is_access(array_type))
       array_type = sem_implicit_dereference(t, tree_value, tree_set_value);
 
    if (!type_is_array(array_type))
@@ -5462,7 +5454,7 @@ static bool sem_check_attr_ref(tree_t t, bool allow_range)
    else if (!sem_check_constrained(name, NULL))
       return false;
 
-   if (tree_has_type(name) && (type_kind(tree_type(name)) == T_ACCESS)) {
+   if (tree_has_type(name) && (type_is_access(tree_type(name)))) {
       // Convert implicit dereference such as PTR'X to PTR.ALL'X
       sem_implicit_dereference(t, tree_name, tree_set_name);
       name = tree_name(t);
@@ -5697,7 +5689,7 @@ static bool sem_check_attr_ref(tree_t t, bool allow_range)
       fatal_at(tree_loc(t), "sorry, attribute %s not implemented", istr(attr));
    }
 
-   if (!sem_static_name(name))
+   if (!sem_static_name(name, sem_globally_static))
       sem_error(name, "invalid attribute reference");
 
    bool allow_user = true;
@@ -5709,7 +5701,7 @@ static bool sem_check_attr_ref(tree_t t, bool allow_range)
          break;
 
       case T_RECORD_REF:
-         decl = sem_find_record_field(search);
+         decl = find_record_field(search);
          assert(decl != NULL);
          break;
 
@@ -5825,8 +5817,8 @@ static bool sem_check_actual(formal_map_t *formals, int nformals,
             sem_error(value, "%s has no formal %s",
                       istr(tree_ident(unit)), istr(tree_ident(ref)));
 
-         if (!sem_static_name(name))
-            sem_error(name, "formal name must be static");
+         if (!sem_static_name(name, sem_locally_static))
+            sem_error(name, "formal name must be locally static");
 
          if (conv != NULL) {
             port_mode_t mode = tree_subkind(decl);
@@ -5907,7 +5899,8 @@ static bool sem_check_actual(formal_map_t *formals, int nformals,
                    "mode OUT", istr(tree_ident(decl)));
    }
 
-   if (!sem_globally_static(actual) && !sem_static_name(actual))
+   if (!sem_globally_static(actual)
+       && !sem_static_name(actual, sem_globally_static))
       sem_error(value, "actual must be globally static expression "
                 "or locally static name");
 
@@ -6083,8 +6076,7 @@ static bool sem_subtype_locally_static(type_t type)
          const int ndims = type_dims(type);
          for (int i = 0; i < ndims; i++) {
             range_t r = type_dim(type, i);
-            if (!sem_locally_static(r.left)
-                || !sem_locally_static(r.right))
+            if (!sem_locally_static(r.left) || !sem_locally_static(r.right))
                return false;
          }
 
@@ -6116,7 +6108,8 @@ static bool sem_locally_static(tree_t t)
       tree_t decl = tree_ref(t);
       const tree_kind_t dkind = tree_kind(decl);
 
-      // A constant reference (other than a deferred constant) with a locally static value
+      // A constant reference (other than a deferred constant) with a
+      // locally static value
       if (dkind == T_CONST_DECL) {
          if (!tree_has_value(decl))
             return false;
@@ -6164,7 +6157,7 @@ static bool sem_locally_static(tree_t t)
           || predef == ATTR_LAST_VALUE || predef == ATTR_DRIVING
           || predef == ATTR_DRIVING_VALUE || predef == ATTR_PATH_NAME)
          return false;
-      else  if (!tree_has_value(t)) {
+      else if (!tree_has_value(t)) {
          type_t type = tree_type(tree_name(t));
          return sem_subtype_locally_static(type);
       }
@@ -6224,7 +6217,7 @@ static bool sem_locally_static(tree_t t)
    return false;
 }
 
-static bool sem_static_name(tree_t t)
+static bool sem_static_name(tree_t t, static_fn_t check_fn)
 {
    // Rules for static names are in LRM 93 6.1
 
@@ -6250,7 +6243,7 @@ static bool sem_static_name(tree_t t)
          case T_BLOCK:
             return true;
          case T_ALIAS:
-            return sem_static_name(tree_value(decl));
+            return sem_static_name(tree_value(decl), check_fn);
          default:
             return false;
          }
@@ -6258,16 +6251,16 @@ static bool sem_static_name(tree_t t)
 
    case T_RECORD_REF:
    case T_ALL:
-      return sem_static_name(tree_value(t));
+      return sem_static_name(tree_value(t), check_fn);
 
    case T_ARRAY_REF:
       {
-         if (!sem_static_name(tree_value(t)))
+         if (!sem_static_name(tree_value(t), check_fn))
             return false;
 
          const int nparams = tree_params(t);
          for (int i = 0; i < nparams; i++) {
-            if (!sem_globally_static(tree_value(tree_param(t, i))))
+            if (!(*check_fn)(tree_value(tree_param(t, i))))
                return false;
          }
 
@@ -6276,14 +6269,14 @@ static bool sem_static_name(tree_t t)
 
    case T_ARRAY_SLICE:
       {
-         if (!sem_static_name(tree_value(t)))
+         if (!sem_static_name(tree_value(t), check_fn))
             return false;
 
          range_t r = tree_range(t);
 
          return (r.kind == RANGE_TO || r.kind == RANGE_DOWNTO)
-            && sem_globally_static(r.left)
-            && sem_globally_static(r.right);
+            && (*check_fn)(r.left)
+            && (*check_fn)(r.right);
       }
       // Fall-through
 
@@ -6875,7 +6868,7 @@ static bool sem_check_file_decl(tree_t t)
 
 static bool sem_is_access(type_t t)
 {
-   return type_kind(t) == T_ACCESS;
+   return type_is_access(t);
 }
 
 static bool sem_check_new(tree_t t)
@@ -6960,7 +6953,7 @@ static bool sem_check_all(tree_t t)
 
    type_t value_type = tree_type(value);
 
-   if (type_kind(value_type) != T_ACCESS)
+   if (!type_is_access(value_type))
       sem_error(value, "expression type %s is not access",
                 sem_type_str(value_type));
 

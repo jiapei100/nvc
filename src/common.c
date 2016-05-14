@@ -622,8 +622,12 @@ tree_t make_default_value(type_t type, const loc_t *loc)
          return null;
       }
 
+   case T_UNRESOLVED:
+      return NULL;
+
    default:
-      assert(false);
+      fatal_trace("cannot handle type %s in %s",
+                  type_kind_str(type_kind(base)), __func__);
    }
 }
 
@@ -807,4 +811,5 @@ void intern_strings(void)
    simple_name_i    = ident_new("simple_name");
    conversion_i     = ident_new("conversion");
    std_i            = ident_new("STD");
+   nnets_i          = ident_new("nnets");
 }

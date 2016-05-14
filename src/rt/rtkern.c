@@ -1,5 +1,5 @@
 //
-//  Copyright (C) 2011-2015  Nick Gasson
+//  Copyright (C) 2011-2016  Nick Gasson
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -68,6 +68,7 @@ struct rt_proc {
    void     *tmp_stack;
    uint32_t  tmp_alloc;
    bool      postponed;
+   bool      pending;
 };
 
 typedef enum {
@@ -250,7 +251,7 @@ static tree_t rt_recall_tree(const char *unit, int32_t where);
 static res_memo_t *rt_memo_resolution_fn(type_t type, resolution_fn_t fn);
 static void _tracef(const char *fmt, ...);
 
-#define GLOBAL_TMP_STACK_SZ (256 * 1024)
+#define GLOBAL_TMP_STACK_SZ (1024 * 1024)
 #define PROC_TMP_STACK_SZ   (64 * 1024)
 
 #define TRACE(...) do {                                 \
@@ -371,6 +372,7 @@ void _sched_waveform(void *_nids, void *values, int32_t n,
       fatal("postponed process %s cannot cause a delta cycle",
             istr(tree_ident(active_proc->source)));
 
+   const uint8_t *vp = values;
    int offset = 0;
    while (offset < n) {
       const netid_t nid = nids[offset];
@@ -378,12 +380,12 @@ void _sched_waveform(void *_nids, void *values, int32_t n,
          netgroup_t *g = &(groups[netdb_lookup(netdb, nid)]);
 
          value_t *values_copy = rt_alloc_value(g);
-         memcpy(values_copy->data, (uint8_t *)values + (offset * g->size),
-                g->size * g->length);
+         memcpy(values_copy->data, vp, g->size * g->length);
 
          if (!rt_sched_driver(g, after, reject, values_copy))
             deltaq_insert_driver(after, g, active_proc);
 
+         vp += g->size * g->length;
          offset += g->length;
       }
       else
@@ -1401,6 +1403,7 @@ static void rt_setup(tree_t top)
       procs[i].postponed  = tree_attr_int(p, postponed_i, 0);
       procs[i].tmp_stack  = NULL;
       procs[i].tmp_alloc  = 0;
+      procs[i].pending    = false;
    }
 }
 
@@ -1612,7 +1615,7 @@ static void rt_wakeup(sens_list_t *sl)
    // generation: these correspond to stale "wait on" statements that
    // have already resumed.
 
-   if ((sl->wakeup_gen == sl->proc->wakeup_gen) || (sl->reenq != NULL)) {
+   if (sl->wakeup_gen == sl->proc->wakeup_gen || sl->reenq != NULL) {
       TRACE("wakeup process %s%s", istr(tree_ident(sl->proc->source)),
             sl->proc->postponed ? " [postponed]" : "");
       ++(sl->proc->wakeup_gen);
@@ -1625,6 +1628,8 @@ static void rt_wakeup(sens_list_t *sl)
          sl->next = resume;
          resume = sl;
       }
+
+      sl->proc->pending = true;
    }
    else
       rt_free(sens_list_stack, sl);
@@ -1850,7 +1855,10 @@ static void rt_resume_processes(sens_list_t **list)
 {
    sens_list_t *it = *list;
    while (it != NULL) {
-      rt_run(it->proc, false /* reset */);
+      if (it->proc->pending) {
+         rt_run(it->proc, false /* reset */);
+         it->proc->pending = false;
+      }
 
       sens_list_t *next = it->next;
 

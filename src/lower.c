@@ -2848,12 +2848,15 @@ static void lower_sched_event(tree_t on, bool is_static)
          assert(false);
       }
 
-      if (array)
+      if (array) {
+         type_t elem = type_elem(type);
          n_elems = lower_array_total_len(type, nets);
-      else if (type_is_record(type))
-         n_elems = emit_const(vtype_offset(), type_width(type));
+         if (type_is_record(elem))
+            n_elems = emit_mul(n_elems,
+                               emit_const(vtype_offset(), type_width(elem)));
+      }
       else
-         n_elems = emit_const(vtype_offset(), 1);
+         n_elems = emit_const(vtype_offset(), type_width(type));
 
       if (array && !lower_const_bounds(type)) {
          // Unwrap the meta-data to get nets array
@@ -4572,7 +4575,7 @@ static void lower_set_verbose(void)
    if (!set) {
       const char *venv = getenv("NVC_LOWER_VERBOSE");
       if (venv != NULL)
-         verbose = isalpha((int)venv[0]) ? venv : "";
+         verbose = isalpha((int)venv[0]) || venv[0] == ':' ? venv : "";
       else
          verbose = opt_get_str("dump-vcode");
    }

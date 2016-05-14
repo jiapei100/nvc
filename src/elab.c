@@ -77,6 +77,7 @@ struct generic_list {
 static void elab_arch(tree_t t, const elab_ctx_t *ctx);
 static void elab_block(tree_t t, const elab_ctx_t *ctx);
 static void elab_stmts(tree_t t, const elab_ctx_t *ctx);
+static void elab_decls(tree_t t, const elab_ctx_t *ctx);
 static void elab_funcs(tree_t arch, tree_t ent, const elab_ctx_t *ctx);
 static void elab_copy_context(tree_t src, const elab_ctx_t *ctx);
 
@@ -588,7 +589,7 @@ static map_list_t *elab_map(tree_t t, tree_t arch,
       tree_rewrite(arch, rewrite_refs, &params);
 
       tree_t ent = tree_ref(arch);
-      if (tree_stmts(ent) > 0)
+      if (tree_stmts(ent) > 0 || tree_decls(ent) > 0)
          tree_rewrite(ent, rewrite_refs, &params);
    }
 
@@ -1000,6 +1001,7 @@ static void elab_instance(tree_t t, const elab_ctx_t *ctx)
 
    tree_t entity = tree_ref(arch);
    elab_copy_context(entity, &new_ctx);
+   elab_decls(entity, &new_ctx);
 
    elab_funcs(arch, entity, ctx);
    simplify(arch);
@@ -1426,6 +1428,7 @@ static void elab_entity_arch(tree_t t, tree_t arch, const elab_ctx_t *ctx)
 
    elab_pseudo_context(ctx->out, t);
    elab_copy_context(t, ctx);
+   elab_decls(t, ctx);
 
    tree_add_attr_str(ctx->out, simple_name_i, npath);
 
@@ -1642,7 +1645,7 @@ tree_t elab(tree_t top)
    if (errors > 0)
       return NULL;
 
-   tree_add_attr_int(e, ident_new("nnets"), next_net);
+   tree_add_attr_int(e, nnets_i, next_net);
 
    if (opt_get_int("cover"))
       cover_tag(e);

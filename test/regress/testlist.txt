@@ -316,3 +316,5 @@ assert5         normal
 jcore3          normal
 jcore4          normal
 jcore5          normal
+vhpi3           normal,vhpi
+jcore6          nromal

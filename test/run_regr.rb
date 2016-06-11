@@ -43,7 +43,7 @@ def run_cmd(c, invert=false)
   pid = fork
   exec("exec #{c} >>out 2>&1") if pid.nil?
   begin
-    timeout(Opts['v'] ? 10 : 5) do
+    Timeout.timeout(Opts['v'] ? 10 : 5) do
       Process.wait
       fail unless $?.exitstatus == (invert ? 1 : 0)
     end
@@ -136,7 +136,7 @@ mkdir_p 'logs'
 Dir.chdir 'logs'
 
 ENV['NVC_LIBPATH'] = LibPath
-ENV['NVC_CYG_LIB'] = "#{BuildDir}/src"
+ENV['NVC_CYG_LIB'] = "#{BuildDir}/lib"
 
 HaveVHPI = !!ENV['HAVE_VHPI']
 
